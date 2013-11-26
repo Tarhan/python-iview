@@ -6,6 +6,7 @@ from http.client import REQUEST_URI_TOO_LONG, NOT_IMPLEMENTED, OK
 import email.parser, email.message
 from functions import setitem
 from io import BytesIO
+import subprocess
 
 try:  # Python 3.3
     from http.client import REQUEST_HEADER_FIELDS_TOO_LARGE
@@ -17,8 +18,44 @@ RTSP_PORT = 554
 UNSUPPORTED_TRANSPORT = 461
 
 #~ class Server(socketserver.ThreadingMixIn, HTTPServer):
-    #~ pass
-Server = HTTPServer
+class Server(HTTPServer):
+    def __init__(self, file, address=("", RTSP_PORT)):
+        ffmpeg = ("ffmpeg",
+            "-loglevel", "warning",
+            "-t", "0",  # Stop before processing any video
+            "-i", file,
+        )
+        if False:  # FF MPEG 2.1
+            rtp = ("-f", "rtp", "rtp://localhost:1")
+            ffmpeg += ("-map", "0:v", "-vcodec", "copy") + rtp
+            ffmpeg += ("-map", "0:a", "-acodec", "copy") + rtp
+        else:  # libav 0.8.6
+            rtp = ("-f", "rtp", "rtp://localhost")
+            ffmpeg += ("-vcodec", "copy", "-an") + rtp
+            ffmpeg += ("-acodec", "copy", "-vn") + rtp + ("-newaudio",)
+        ffmpeg = subprocess.Popen(ffmpeg, stdout=subprocess.PIPE, bufsize=-1)
+        with ffmpeg:
+            self._sdp = BytesIO()
+            line = ffmpeg.stdout.readline()
+            
+            # FF MPEG unhelpfully adds this prefix to its output
+            if line.strip() == b"SDP:":
+                line = ffmpeg.stdout.readline()
+            
+            while line:
+                if not line.strip():
+                    break
+                self._sdp.write(line)
+                line = ffmpeg.stdout.readline()
+            else:
+                with ffmpeg:
+                    pass  # Close and wait for process
+                msg = "FF MPEG failed generating SDP data; exit status: {}"
+                raise EnvironmentError(msg.format(ffmpeg.returncode))
+        
+        self._sdp = self._sdp.getvalue()
+        
+        HTTPServer.__init__(self, address, Handler)
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "RTSP/1.0"
@@ -85,20 +122,11 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "DESCRIBE")
     def handle_describe(self):
-        sdp = (
-            b"v=0\r\n"
-            b"m=video 0 RTP/AVP 96\r\n"
-            b"a=rtpmap:96 H264/90000\r\n"
-#~ a=fmtp:96 packetization-mode=1;profile-level-id=4d401f;sprop-parameter-sets=Z01AH5ZzgUBf8uAoEAAA4UAAK/IDRgBDwAKkl73w+EQijw==,aP48gA==;
-            b"m=audio 0 RTP/AVP 96\r\n"
-            b"a=rtpmap:96 mpeg4-generic/44100/2\r\n"  # OR MP4A-LATM?
-#~ a=fmtp:96 streamtype=5; profile-level-id=15; mode=AAC-hbr; config=121056e500; SizeLength=13; IndexLength=3; IndexDeltaLength=3; Profile=1;
-        )
         self.send_response(OK)
         self.send_header("Content-Type", "application/sdp")
-        self.send_header("Content-Length", len(sdp))
+        self.send_header("Content-Length", len(self.server._sdp))
         self.end_headers()
-        self.wfile.write(sdp)
+        self.wfile.write(self.server._sdp)
     
     @setitem(handlers, "SETUP")
     def handle_setup(self):
@@ -121,8 +149,8 @@ class Handler(BaseHTTPRequestHandler):
     #~ def handle_pause(self):
         #~ return self.handle_request()
 
-def main(port=RTSP_PORT):
-    Server(("", port), Handler).serve_forever()
+def main(file, port=RTSP_PORT):
+    Server(file, ("", port)).serve_forever()
 
 if __name__ == "__main__":
     from funcparams import command
