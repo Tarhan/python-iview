@@ -2,7 +2,9 @@ from calltrace import traced
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
 #~ import socketserver
-from http.client import REQUEST_URI_TOO_LONG, NOT_IMPLEMENTED, OK
+from http.client import REQUEST_URI_TOO_LONG, REQUEST_HEADER_FIELDS_TOO_LARGE
+from http.client import NOT_IMPLEMENTED
+from http.client import OK
 import email.parser, email.message
 from functions import setitem
 from io import BytesIO
@@ -10,15 +12,7 @@ import subprocess
 import sys
 import random
 
-try:  # Python 3.3
-    from http.client import REQUEST_HEADER_FIELDS_TOO_LARGE
-except ImportError:  # Python < 3.3
-    REQUEST_HEADER_FIELDS_TOO_LARGE = 431
-
 RTSP_PORT = 554
-
-SESSION_NOT_FOUND = 454
-UNSUPPORTED_TRANSPORT = 461
 
 _SESSION_DIGITS = 25
 
@@ -72,6 +66,7 @@ class Server(HTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "RTSP/1.0"
+    responses = dict(BaseHTTPRequestHandler.responses)  # Extended below
     
     def handle_one_request(self):
         self.close_connection = True
@@ -209,6 +204,16 @@ class Handler(BaseHTTPRequestHandler):
     #~ @setitem(handlers, "PAUSE")
     #~ def handle_pause(self):
         #~ return self.handle_request()
+
+for (code, message) in (
+    (454, "Session Not Found"),
+    (459, "Aggregate Operation Not Allowed"),
+    (460, "Only Aggregate Operation Allowed"),
+    (461, "Unsupported Transport"),
+):
+    symbol = "_".join(message.split()).upper()
+    globals()[symbol] = code
+    Handler.responses[code] = (message,)
 
 def main(file, port=RTSP_PORT):
     Server(file, ("", port)).serve_forever()
