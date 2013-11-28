@@ -7,6 +7,7 @@ import email.parser, email.message
 from functions import setitem
 from io import BytesIO
 import subprocess
+import sys
 
 try:  # Python 3.3
     from http.client import REQUEST_HEADER_FIELDS_TOO_LARGE
@@ -56,6 +57,14 @@ class Server(HTTPServer):
         self._sdp = self._sdp.getvalue()
         
         HTTPServer.__init__(self, address, Handler)
+    
+    def handle_error(*pos, **kw):
+        exc = sys.exc_info()[0]
+        if issubclass(exc, ConnectionError):
+            return
+        if not issubclass(exc, Exception):
+            raise  # Force server loop to exit
+        HTTPServer.handle_error(*pos, **kw)
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "RTSP/1.0"
@@ -153,5 +162,8 @@ def main(file, port=RTSP_PORT):
     Server(file, ("", port)).serve_forever()
 
 if __name__ == "__main__":
-    from funcparams import command
-    command()
+    try:
+        from funcparams import command
+        command()
+    except (KeyboardInterrupt, BrokenPipeError):
+        raise SystemExit(1)
