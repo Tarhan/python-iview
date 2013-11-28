@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from http.client import (
     REQUEST_URI_TOO_LONG, NOT_FOUND, REQUEST_HEADER_FIELDS_TOO_LARGE,
 )
-from http.client import NOT_IMPLEMENTED
+from http.client import NOT_IMPLEMENTED, INTERNAL_SERVER_ERROR
 from http.client import OK
 import email.parser, email.message
 from functions import setitem
@@ -85,37 +85,44 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self.request_version = None
         self.headers = self.MessageClass()
-        
-        self.requestline = self.rfile.readline(1000 + 1)
-        if not self.requestline:
-            return
-        if len(self.requestline) > 1000:
-            self.send_error(REQUEST_URI_TOO_LONG, "Request line too long")
-            return
-        
-        self.requestline = self.requestline.decode("latin-1").rstrip("\r\n")
-        split = self.requestline.split(maxsplit=3)
-        self.command, self.path, self.request_version = split[:3]
-        
-        parser = email.parser.BytesFeedParser(_factory=self.MessageClass)
-        for _ in range(200):
-            line = self.rfile.readline(1000 + 1)
-            if len(line) > 1000:
-                msg = "Request header line too long"
-                self.send_error(REQUEST_HEADER_FIELDS_TOO_LARGE, msg)
+        try:
+            self.requestline = self.rfile.readline(1000 + 1)
+            if not self.requestline:
                 return
-            parser.feed(line)
-            if not line.rstrip(b"\r\n"):
-                break
-        else:
-            msg = "Request header too long"
-            self.send_error(REQUEST_HEADER_FIELDS_TOO_LARGE, msg)
-            return
-        self.headers = parser.close()
+            if len(self.requestline) > 1000:
+                msg = "Request line too long"
+                raise ErrorResponse(REQUEST_URI_TOO_LONG, msg)
+            
+            self.requestline = self.requestline.decode("latin-1")
+            self.requestline = self.requestline.rstrip("\r\n")
+            split = self.requestline.split(maxsplit=3)
+            self.command, self.path, self.request_version = split[:3]
+            
+            parser = email.parser.BytesFeedParser(_factory=self.MessageClass)
+            for _ in range(200):
+                line = self.rfile.readline(1000 + 1)
+                if len(line) > 1000:
+                    msg = "Request header line too long"
+                    raise ErrorResponse(REQUEST_HEADER_FIELDS_TOO_LARGE, msg)
+                parser.feed(line)
+                if not line.rstrip(b"\r\n"):
+                    break
+            else:
+                msg = "Request header too long"
+                raise ErrorResponse(REQUEST_HEADER_FIELDS_TOO_LARGE, msg)
+            self.headers = parser.close()
+            
+            self.close_connection = False
+            handler = self.handlers.get(self.command,
+                type(self).handle_request)
+            handler(self)
         
-        handler = self.handlers.get(self.command, type(self).handle_request)
-        handler(self)
-        self.close_connection = False
+        except ErrorResponse as resp:
+            self.send_error(resp.code, resp.message)
+        except Exception as err:
+            self.close_connection = True
+            self.server.handle_error(self.request, self.client_address)
+            self.send_error(INTERNAL_SERVER_ERROR, err)
     
     def send_error(self, code, message=None):
         self.send_response(code, message)
@@ -139,7 +146,7 @@ class Handler(BaseHTTPRequestHandler):
     
     def handle_request(self):
         msg = 'Request method "{}" not implemented'.format(self.command)
-        self.send_error(NOT_IMPLEMENTED, msg)
+        raise ErrorResponse(NOT_IMPLEMENTED, msg)
     
     @setitem(handlers, "DESCRIBE")
     def handle_describe(self):
@@ -160,8 +167,7 @@ class Handler(BaseHTTPRequestHandler):
         
         #~ if self.headers.get_param("interleaved", header="Transport") is None:
             #~ msg = "Only interleaved transport supported"
-            #~ self.send_error(UNSUPPORTED_TRANSPORT, msg)
-            #~ return
+            #~ raise ErrorResponse(UNSUPPORTED_TRANSPORT, msg)
         
         for transports in self.headers.get_all("Transport", ()):
             if '"' in transports:
@@ -195,8 +201,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             break
         else:
-            self.send_error(UNSUPPORTED_TRANSPORT)
-            return
+            raise ErrorResponse(UNSUPPORTED_TRANSPORT)
         
         session = self.headers.get("Session")
         if session is None:
@@ -205,8 +210,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 session = int(session, 16)
             except ValueError as err:
-                self.send_error(SESSION_NOT_FOUND, err)
-                return
+                raise ErrorResponse(SESSION_NOT_FOUND, err)
         
         self.send_response(OK)
         
@@ -248,6 +252,12 @@ for (code, message) in (
     symbol = "_".join(message.split()).upper()
     globals()[symbol] = code
     Handler.responses[code] = (message,)
+
+class ErrorResponse(Exception):
+    def __init__(self, code, message=None):
+        self.code = code
+        self.message = message
+        Exception.__init__(self, self.code)
 
 def main(file, port=RTSP_PORT):
     Server(file, ("", port)).serve_forever()
