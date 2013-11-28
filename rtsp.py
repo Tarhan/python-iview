@@ -66,6 +66,7 @@ class Server(HTTPServer):
                 raise EnvironmentError(msg.format(ffmpeg.returncode))
         
         self._sdp = self._sdp.getvalue()
+        self._sessions = dict()
         
         HTTPServer.__init__(self, address, Handler)
     
@@ -161,6 +162,7 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "SETUP")
     def handle_setup(self):
+        (key, session) = self.get_session()
         stream = self.parse_stream()
         if stream is None:
             raise ErrorResponse(AGGREGATE_OPERATION_NOT_ALLOWED)
@@ -181,6 +183,7 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 
                 unicast = False
+                port = None
                 for param in params[1:]:
                     (name, _, value) = param.partition("=")
                     name = name.strip()
@@ -192,6 +195,17 @@ class Handler(BaseHTTPRequestHandler):
                         frozenset((value,)) != {"PLAY"}  # TODO: parse comma-separated list
                     or name == "interleaved"):
                         break
+                    
+                    if name == "client_port" and value:
+                        if port:
+                            break
+                        (port, _, end) = value.partition("-")
+                        try:
+                            port = int(port)
+                            if end and int(end) != port + 1:
+                                break
+                        except ValueError:
+                            break
                 
                 else:
                     if unicast:
@@ -203,19 +217,15 @@ class Handler(BaseHTTPRequestHandler):
         else:
             raise ErrorResponse(UNSUPPORTED_TRANSPORT)
         
-        session = self.headers.get("Session")
-        if session is None:
-            session = random.getrandbits(_SESSION_DIGITS * 4)
-        else:
-            try:
-                session = int(session, 16)
-            except ValueError as err:
-                raise ErrorResponse(SESSION_NOT_FOUND, err)
+        if key is None:
+            key = random.getrandbits(_SESSION_DIGITS * 4)
+            self.server._sessions[key] = session
+        session[stream] = (self.client_address[0], port)
         
         self.send_response(OK)
         
-        session = format(session, "0{}X".format(_SESSION_DIGITS))
-        self.send_header("Session", session)
+        key = format(key, "0{}X".format(_SESSION_DIGITS))
+        self.send_header("Session", key)
         
         self.send_header("Transport", transport)
         self.end_headers()
@@ -242,6 +252,19 @@ class Handler(BaseHTTPRequestHandler):
             msg = msg.format(self.server._streams - 1)
             raise ErrorResponse(NOT_FOUND, msg)
         return stream
+    
+    def get_session(self):
+        key = self.headers.get("Session")
+        if key is None:
+            return (None, [None] * self.server._streams)
+        try:
+            key = int(key, 16)
+        except ValueError as err:
+            raise ErrorResponse(SESSION_NOT_FOUND, err)
+        session = self.server._sessions.get(key)
+        if session is None:
+            raise ErrorResponse(SESSION_NOT_FOUND)
+        return (key, session)
 
 for (code, message) in (
     (454, "Session Not Found"),
