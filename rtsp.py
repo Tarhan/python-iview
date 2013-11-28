@@ -1,8 +1,11 @@
 from calltrace import traced
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlsplit
 #~ import socketserver
-from http.client import REQUEST_URI_TOO_LONG, REQUEST_HEADER_FIELDS_TOO_LARGE
+from http.client import (
+    REQUEST_URI_TOO_LONG, NOT_FOUND, REQUEST_HEADER_FIELDS_TOO_LARGE,
+)
 from http.client import NOT_IMPLEMENTED
 from http.client import OK
 import email.parser, email.message
@@ -12,6 +15,9 @@ import subprocess
 import sys
 import random
 
+#~ FFMPEG_2 = True  # FF MPEG 2.1
+FFMPEG_2 = False  # libav 0.8.6
+
 RTSP_PORT = 554
 
 _SESSION_DIGITS = 25
@@ -19,19 +25,18 @@ _SESSION_DIGITS = 25
 #~ class Server(socketserver.ThreadingMixIn, HTTPServer):
 class Server(HTTPServer):
     def __init__(self, file, address=("", RTSP_PORT)):
-        ffmpeg = ("ffmpeg",
-            "-loglevel", "warning",
+        ffmpeg = ["ffmpeg", "-loglevel", "warning",
             "-t", "0",  # Stop before processing any video
             "-i", file,
-        )
-        if False:  # FF MPEG 2.1
+        ]
+        if FFMPEG_2:
             rtp = ("-f", "rtp", "rtp://localhost:1")
-            ffmpeg += ("-map", "0:v", "-vcodec", "copy") + rtp
-            ffmpeg += ("-map", "0:a", "-acodec", "copy") + rtp
-        else:  # libav 0.8.6
+            ffmpeg.extend(("-map", "0:v", "-vcodec", "copy") + rtp)
+            ffmpeg.extend(("-map", "0:a", "-acodec", "copy") + rtp)
+        else:
             rtp = ("-f", "rtp", "rtp://localhost")
-            ffmpeg += ("-vcodec", "copy", "-an") + rtp
-            ffmpeg += ("-acodec", "copy", "-vn") + rtp + ("-newaudio",)
+            ffmpeg.extend(("-vcodec", "copy", "-an") + rtp)
+            ffmpeg.extend(("-acodec", "copy", "-vn") + rtp + ("-newaudio",))
         ffmpeg = subprocess.Popen(ffmpeg, stdout=subprocess.PIPE, bufsize=-1)
         with ffmpeg:
             self._sdp = BytesIO()
@@ -41,10 +46,18 @@ class Server(HTTPServer):
             if line.strip() == b"SDP:":
                 line = ffmpeg.stdout.readline()
             
+            self._streams = 0
             while line:
                 if not line.strip():
                     break
-                self._sdp.write(line)
+                if not line.startswith(b"a=control:"):
+                    self._sdp.write(line)
+                
+                if line.startswith(b"m="):
+                    line = "a=control:{}\r\n".format(self._streams)
+                    self._streams += 1
+                    self._sdp.write(line.encode("ascii"))
+                
                 line = ffmpeg.stdout.readline()
             else:
                 with ffmpeg:
@@ -130,6 +143,9 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "DESCRIBE")
     def handle_describe(self):
+        if self.parse_stream() is not None:
+            raise ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
+        
         self.send_response(OK)
         self.send_header("Content-Type", "application/sdp")
         self.send_header("Content-Length", len(self.server._sdp))
@@ -138,6 +154,10 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "SETUP")
     def handle_setup(self):
+        stream = self.parse_stream()
+        if stream is None:
+            raise ErrorResponse(AGGREGATE_OPERATION_NOT_ALLOWED)
+        
         #~ if self.headers.get_param("interleaved", header="Transport") is None:
             #~ msg = "Only interleaved transport supported"
             #~ self.send_error(UNSUPPORTED_TRANSPORT, msg)
@@ -204,6 +224,20 @@ class Handler(BaseHTTPRequestHandler):
     #~ @setitem(handlers, "PAUSE")
     #~ def handle_pause(self):
         #~ return self.handle_request()
+    
+    def parse_stream(self):
+        path = urlsplit(self.path).path.lstrip("/")
+        if not path:
+            return None
+        try:
+            stream = int(path)
+        except ValueError as err:
+            raise ErrorResponse(NOT_FOUND, err)
+        if stream not in range(self.server._streams):
+            msg = "Stream number out of range 0-{}"
+            msg = msg.format(self.server._streams - 1)
+            raise ErrorResponse(NOT_FOUND, msg)
+        return stream
 
 for (code, message) in (
     (454, "Session Not Found"),
