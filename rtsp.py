@@ -8,6 +8,7 @@ from functions import setitem
 from io import BytesIO
 import subprocess
 import sys
+import random
 
 try:  # Python 3.3
     from http.client import REQUEST_HEADER_FIELDS_TOO_LARGE
@@ -16,7 +17,10 @@ except ImportError:  # Python < 3.3
 
 RTSP_PORT = 554
 
+SESSION_NOT_FOUND = 454
 UNSUPPORTED_TRANSPORT = 461
+
+_SESSION_DIGITS = 25
 
 #~ class Server(socketserver.ThreadingMixIn, HTTPServer):
 class Server(HTTPServer):
@@ -139,14 +143,62 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "SETUP")
     def handle_setup(self):
-        if self.headers.get_param("interleaved", header="Transport") is None:
-            msg = "Only interleaved transport supported"
-            self.send_error(UNSUPPORTED_TRANSPORT, msg)
+        #~ if self.headers.get_param("interleaved", header="Transport") is None:
+            #~ msg = "Only interleaved transport supported"
+            #~ self.send_error(UNSUPPORTED_TRANSPORT, msg)
+            #~ return
+        
+        for transports in self.headers.get_all("Transport", ()):
+            if '"' in transports:
+                continue  # Parsing quotes not implemented
+            
+            for transport in transports.split(","):
+                transport = transport.strip()
+                
+                params = transport.split(";")
+                if params[0].strip() not in {"RTP/AVP", "RTP/AVP/UDP"}:
+                    continue
+                
+                unicast = False
+                for param in params[1:]:
+                    (name, _, value) = param.partition("=")
+                    name = name.strip()
+                    value = value.strip()
+                    
+                    unicast = unicast or name == "unicast" and not value
+                    if (
+                        name == "mode" and value and
+                        frozenset((value,)) != {"PLAY"}  # TODO: parse comma-separated list
+                    or name == "interleaved"):
+                        break
+                
+                else:
+                    if unicast:
+                        break
+            
+            else:
+                continue
+            break
+        else:
+            self.send_error(UNSUPPORTED_TRANSPORT)
             return
         
+        session = self.headers.get("Session")
+        if session is None:
+            session = random.getrandbits(_SESSION_DIGITS * 4)
+        else:
+            try:
+                session = int(session, 16)
+            except ValueError as err:
+                self.send_error(SESSION_NOT_FOUND, err)
+                return
+        
         self.send_response(OK)
-        for header in self.headers.get_all("Transport", ()):
-            self.send_header("Transport", header)
+        
+        session = format(session, "0{}X".format(_SESSION_DIGITS))
+        self.send_header("Session", session)
+        
+        self.send_header("Transport", transport)
         self.end_headers()
     
     handlers["TEARDOWN"] = handle_request
