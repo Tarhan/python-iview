@@ -141,7 +141,17 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "OPTIONS")
     def handle_options(self):
-        self.send_response(OK)
+        if self.path != "*" and urlsplit(self.path).path:
+            try:
+                (key, session) = self.get_session()
+                stream = self.parse_stream()
+            except ErrorResponse as resp:
+                self.send_response(resp.code, resp.message)
+            else:
+                self.send_response(OK)
+                self.send_allow(key, session, stream)
+        else:
+            self.send_response(OK)
         self.send_header("Public", ", ".join(self.handlers.keys()))
         self.end_headers()
     
@@ -223,18 +233,50 @@ class Handler(BaseHTTPRequestHandler):
         session[stream] = (self.client_address[0], port)
         
         self.send_response(OK)
-        
-        key = format(key, "0{}X".format(_SESSION_DIGITS))
-        self.send_header("Session", key)
-        
+        self.send_session(key)
         self.send_header("Transport", transport)
         self.end_headers()
     
-    handlers["TEARDOWN"] = handle_request
+    @setitem(handlers, "TEARDOWN")
+    def handle_teardown(self):
+        (key, session) = self.get_session()
+        if not key:
+            raise ErrorResponse(SESSION_NOT_FOUND, "No session given")
+        stream = self.parse_stream()
+        if stream is None:
+            del self.server._sessions[key]
+        else:
+            if not session[stream]:
+                msg = "Stream {} not set up".format(stream)
+                self.send_invalidstate(key, session, stream, msg)
+                return
+            # TODO: cannot allow single stream op if playing multiple streams
+            
+            session[stream] = None
+            if not any(session):
+                del self.server._sessions[key]
+        
+        self.send_response(OK)
+        if key in self.server._sessions:
+            self.send_session(key)
+        self.end_headers()
     
     @setitem(handlers, "PLAY")
     def handle_play(self):
+        (key, session) = self.get_session()
+        if not key:
+            raise ErrorResponse(SESSION_NOT_FOUND, "No session given")
+        stream = self.parse_stream()
+        if stream is not None:
+            if not session[stream]:
+                msg = "Stream {} not set up".format(stream)
+                self.send_invalidstate(key, session, stream, msg)
+                return
+            if any(session[:stream]) or any(session[stream + 1:]):
+                raise ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
+        
         return self.handle_request()
+    
     #~ @setitem(handlers, "PAUSE")
     #~ def handle_pause(self):
         #~ return self.handle_request()
@@ -265,9 +307,32 @@ class Handler(BaseHTTPRequestHandler):
         if session is None:
             raise ErrorResponse(SESSION_NOT_FOUND)
         return (key, session)
+    
+    def send_allow(self, session_key, session, stream):
+        allow = ["OPTIONS"]
+        if stream is None:
+            allow.append("DESCRIBE")
+        else:
+            allow.append("SETUP")
+        if session_key is not None and (stream is None or session[stream]):
+            allow.append("TEARDOWN")
+            if (stream is None or
+            not any(session[:stream]) and not any(session[stream + 1:])):
+                allow.append("PLAY")
+        self.send_header("Allow", ", ".join(allow))
+    
+    def send_session(self, key):
+        key = format(key, "0{}X".format(_SESSION_DIGITS))
+        self.send_header("Session", key)
+    
+    def send_invalidstate(self, key, session, stream, msg=None):
+        self.send_response(METHOD_NOT_VALID_IN_THIS_STATE, msg)
+        self.send_allow(key, session, stream)
+        self.end_headers()
 
 for (code, message) in (
     (454, "Session Not Found"),
+    (455, "Method Not Valid In This State"),
     (459, "Aggregate Operation Not Allowed"),
     (460, "Only Aggregate Operation Allowed"),
     (461, "Unsupported Transport"),
