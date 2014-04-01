@@ -15,8 +15,8 @@ import subprocess
 import sys
 import random
 
-#~ FFMPEG_2 = True  # FF MPEG 2.1
-FFMPEG_2 = False  # libav 0.8.6
+FFMPEG_2 = True  # FF MPEG 2.1
+#FFMPEG_2 = False  # libav 0.8.6
 
 RTSP_PORT = 554
 
