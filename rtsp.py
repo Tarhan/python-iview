@@ -16,17 +16,16 @@ import sys
 import random
 from functions import attributes
 
-FFMPEG_2 = True  # FF MPEG 2.1
-#FFMPEG_2 = False  # libav 0.8.6
-
 RTSP_PORT = 554
 
 _SESSION_DIGITS = 25
 
 #~ class Server(socketserver.ThreadingMixIn, HTTPServer):
 class Server(HTTPServer):
-    def __init__(self, file, address=("", RTSP_PORT)):
+    def __init__(self, file, address=("", RTSP_PORT), *, ffmpeg2=True):
+        """ffmpeg2: Assume FF MPEG 2.1 rather than libav 0.8.6"""
         self._file = file
+        self._ffmpeg2 = ffmpeg2
         self._sessions = dict()
         
         ffmpeg = self._ffmpeg(
@@ -95,7 +94,7 @@ class Server(HTTPServer):
         first = True
         for (type, address) in streams:
             t = type[0]
-            if FFMPEG_2:
+            if self._ffmpeg2:
                 cmd.extend(("-map", "0:" + t))
             cmd.extend(("-{}codec".format(t), "copy"))
             cmd.extend("-{}n".format(other[0]) for
@@ -107,12 +106,12 @@ class Server(HTTPServer):
                 if ":" in host:
                     host = "[{}]".format(host)
                 cmd.append("rtp://{}:{}".format(host, port))
-            elif FFMPEG_2:
+            elif self._ffmpeg2:
                 cmd.append("rtp://localhost:1")
             else:
                 cmd.append("rtp://localhost")
             
-            if not FFMPEG_2 and not first:
+            if not self._ffmpeg2 and not first:
                 cmd += ("-new" + type,)
             first = False
         
@@ -438,8 +437,8 @@ class ErrorResponse(Exception):
         Exception.__init__(self, self.code)
 
 @attributes(param_types=dict(port=int))
-def main(file, port=RTSP_PORT):
-    Server(file, ("", port)).serve_forever()
+def main(file, port=RTSP_PORT, *, noffmpeg2=False):
+    Server(file, ("", port), ffmpeg2=not noffmpeg2).serve_forever()
 
 if __name__ == "__main__":
     try:
