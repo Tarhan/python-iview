@@ -225,10 +225,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_invalidstate(key, session, stream, msg)
             return
         
-        #~ if self.headers.get_param("interleaved", header="Transport") is None:
-            #~ msg = "Only interleaved transport supported"
-            #~ raise ErrorResponse(UNSUPPORTED_TRANSPORT, msg)
-        
         for transports in self.headers.get_all("Transport", ()):
             if '"' in transports:
                 continue  # Parsing quotes not implemented
@@ -237,22 +233,33 @@ class Handler(BaseHTTPRequestHandler):
                 transport = transport.strip()
                 
                 params = transport.split(";")
-                if params[0].strip() not in {"RTP/AVP", "RTP/AVP/UDP"}:
-                    continue
+                udp = params[0].strip() in {"RTP/AVP", "RTP/AVP/UDP"}
                 
                 unicast = False
                 port = None
+                interleaved = None
+                ilstart = None
                 for param in params[1:]:
                     (name, _, value) = param.partition("=")
                     name = name.strip()
                     value = value.strip()
                     
                     unicast = unicast or name == "unicast" and not value
-                    if (
-                        name == "mode" and value and
-                        frozenset((value,)) != {"PLAY"}  # TODO: parse comma-separated list
-                    or name == "interleaved"):
+                    if (name == "mode" and value and
+                    frozenset((value,)) != {"PLAY"}):  # TODO: parse comma-separated list
                         break
+                    
+                    if name == "interleaved":
+                        interleaved = True
+                        if ilstart is not None:
+                            break
+                        (ilstart, _, end) = value.partition("-")
+                        try:
+                            ilstart = int(ilstart)
+                            if end and int(end) != ilstart + 1:
+                                break
+                        except ValueError:
+                            break
                     
                     if name == "client_port" and value:
                         if port is not None:
@@ -266,14 +273,18 @@ class Handler(BaseHTTPRequestHandler):
                             break
                 
                 else:
-                    if unicast and port is not None:
+                    if interleaved:
+                        if ilstart is not None:
+                            msg = "Interleaved transport not yet implemented"
+                            raise ErrorResponse(UNSUPPORTED_TRANSPORT, msg)
+                    elif udp and unicast and port is not None:
                         break
             
             else:
                 continue
             break
         else:
-            msg = "No supported unicast UDP transport given"
+            msg = "No supported unicast UDP or interleaved transport given"
             raise ErrorResponse(UNSUPPORTED_TRANSPORT, msg)
         
         if key is None:
