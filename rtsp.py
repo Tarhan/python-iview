@@ -27,31 +27,34 @@ class Server(HTTPServer):
         self._file = file
         self._ffmpeg2 = ffmpeg2
         self._sessions = dict()
-        
-        ffmpeg = self._ffmpeg(
-            ("-t", "0"),  # Stop before processing any video
-            ((type, None) for type in self._streamtypes),
+        (self._sdp, self._streams) = self._get_sdp(self._file)
+        HTTPServer.__init__(self, address, Handler)
+    
+    def _get_sdp(self, file):
+        options = ("-t", "0")  # Stop before processing any video
+        streams = ((type, None) for type in self._streamtypes)
+        ffmpeg = self._ffmpeg(file, options, streams,
             stdout=subprocess.PIPE, bufsize=-1,
         )
         with ffmpeg:
-            self._sdp = BytesIO()
+            sdp = BytesIO()
             line = ffmpeg.stdout.readline()
             
             # FF MPEG unhelpfully adds this prefix to its output
             if line.strip() == b"SDP:":
                 line = ffmpeg.stdout.readline()
             
-            self._streams = 0
+            streams = 0
             while line:
                 if not line.strip():
                     break
                 if not line.startswith(b"a=control:"):
-                    self._sdp.write(line)
+                    sdp.write(line)
                 
                 if line.startswith(b"m="):
-                    line = "a=control:{}\r\n".format(self._streams)
-                    self._streams += 1
-                    self._sdp.write(line.encode("ascii"))
+                    line = "a=control:{}\r\n".format(streams)
+                    streams += 1
+                    sdp.write(line.encode("ascii"))
                 
                 line = ffmpeg.stdout.readline()
             else:
@@ -59,9 +62,7 @@ class Server(HTTPServer):
                     pass  # Close and wait for process
                 msg = "FF MPEG failed generating SDP data; exit status: {}"
                 raise EnvironmentError(msg.format(ffmpeg.returncode))
-        self._sdp = self._sdp.getvalue()
-        
-        HTTPServer.__init__(self, address, Handler)
+        return (sdp.getvalue(), streams)
     
     def handle_error(*pos, **kw):
         exc = sys.exc_info()[0]
@@ -79,7 +80,7 @@ class Server(HTTPServer):
     
     _streamtypes = ("video", "audio")
     
-    def _ffmpeg(self, options, streams, **popenargs):
+    def _ffmpeg(self, file, options, streams, **popenargs):
         """Spawn an FF MPEG child process
         
         * options: CLI arguments to include
@@ -87,7 +88,7 @@ class Server(HTTPServer):
         """
         cmd = ["ffmpeg", "-loglevel", "warning"]
         cmd.extend(options)
-        cmd.extend(("-i", self._file))
+        cmd.extend(("-i", file))
         
         first = True
         for (type, address) in streams:
@@ -340,10 +341,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_invalidstate(key, session, stream, msg)
             return
         
+        options = ("-re",)
         streams = ((type, address) for (type, address) in
             zip(self.server._streamtypes, addresses) if address)
-        session.ffmpeg = self.server._ffmpeg(("-re",), streams,
-            stdout=subprocess.DEVNULL)
+        session.ffmpeg = self.server._ffmpeg(
+            self.server._file, options, streams, stdout=subprocess.DEVNULL)
         self.send_response(OK)
         self.end_headers()
     
