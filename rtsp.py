@@ -14,6 +14,7 @@ from io import BytesIO
 import subprocess
 import sys
 import random
+from functions import attributes
 
 FFMPEG_2 = True  # FF MPEG 2.1
 #FFMPEG_2 = False  # libav 0.8.6
@@ -420,6 +421,7 @@ class ErrorResponse(Exception):
         self.message = message
         Exception.__init__(self, self.code)
 
+@attributes(param_types=dict(port=int))
 def main(file, port=RTSP_PORT):
     Server(file, ("", port)).serve_forever()
 
