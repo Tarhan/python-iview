@@ -82,6 +82,11 @@ class Server(HTTPServer):
     _streamtypes = ("video", "audio")
     
     def _ffmpeg(self, options, streams, **popenargs):
+        """Spawn an FF MPEG child process
+        
+        * options: CLI arguments to include
+        * streams: Output an RTP stream for each of these
+        """
         cmd = ["ffmpeg", "-loglevel", "warning"]
         cmd.extend(options)
         cmd.extend(("-i", self._file))
