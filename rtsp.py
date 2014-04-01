@@ -126,6 +126,7 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self.request_version = None
         self.headers = self.MessageClass()
+        self.response_started = False
         try:
             self.requestline = self.rfile.readline(1000 + 1)
             if not self.requestline:
@@ -161,15 +162,18 @@ class Handler(BaseHTTPRequestHandler):
         except ErrorResponse as resp:
             self.send_error(resp.code, resp.message)
         except Exception as err:
-            self.close_connection = True
             self.server.handle_error(self.request, self.client_address)
-            self.send_error(INTERNAL_SERVER_ERROR, err)
+            if self.response_started:
+                self.close_connection = True
+            else:
+                self.send_error(INTERNAL_SERVER_ERROR, err)
     
     def send_error(self, code, message=None):
         self.send_response(code, message)
         self.end_headers()
     
     def send_response(self, *pos, **kw):
+        self.response_started = True
         BaseHTTPRequestHandler.send_response(self, *pos, **kw)
         for cseq in self.headers.get_all("CSeq", ()):
             self.send_header("CSeq", cseq)
