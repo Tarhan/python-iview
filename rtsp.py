@@ -273,7 +273,8 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             break
         else:
-            raise ErrorResponse(UNSUPPORTED_TRANSPORT)
+            msg = "No supported unicast UDP transport given"
+            raise ErrorResponse(UNSUPPORTED_TRANSPORT, msg)
         
         if key is None:
             key = random.getrandbits(_SESSION_DIGITS * 4)
