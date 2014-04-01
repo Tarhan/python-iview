@@ -71,13 +71,11 @@ class Server(HTTPServer):
             raise  # Force server loop to exit
         HTTPServer.handle_error(*pos, **kw)
     
-    def serve_forever(self, *pos, **kw):
-        try:
-            return HTTPServer.serve_forever(self, *pos, **kw)
-        finally:
-            while self._sessions:
-                (_, session) = self._sessions.popitem()
-                session.end()
+    def server_close(self, *pos, **kw):
+        while self._sessions:
+            (_, session) = self._sessions.popitem()
+            session.end()
+        return HTTPServer.server_close(self, *pos, **kw)
     
     _streamtypes = ("video", "audio")
     
@@ -438,7 +436,11 @@ class ErrorResponse(Exception):
 
 @attributes(param_types=dict(port=int))
 def main(file, port=RTSP_PORT, *, noffmpeg2=False):
-    Server(file, ("", port), ffmpeg2=not noffmpeg2).serve_forever()
+    server = Server(file, ("", port), ffmpeg2=not noffmpeg2)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
 
 if __name__ == "__main__":
     try:
