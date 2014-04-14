@@ -179,9 +179,6 @@ class Handler(BaseHTTPRequestHandler):
         for cseq in self.headers.get_all("CSeq", ()):
             self.send_header("CSeq", cseq)
     
-    def send_header(self, name, value, *pos, **kw):
-        return BaseHTTPRequestHandler.send_header(self, name, value, *pos, **kw)
-    
     handlers = dict()
     
     @setitem(handlers, "OPTIONS")
