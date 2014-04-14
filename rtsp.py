@@ -194,12 +194,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_allow(key, session, stream)
         else:
             self.send_response(OK)
-        self.send_header("Public", ", ".join(self.handlers.keys()))
+        self.send_public()
         self.end_headers()
     
     def handle_request(self):
         msg = 'Request method "{}" not implemented'.format(self.command)
-        raise ErrorResponse(NOT_IMPLEMENTED, msg)
+        self.send_response(NOT_IMPLEMENTED, msg)
+        self.send_public()
+        self.end_headers()
     
     @setitem(handlers, "DESCRIBE")
     def handle_describe(self):
@@ -379,6 +381,9 @@ class Handler(BaseHTTPRequestHandler):
         if session is None:
             raise ErrorResponse(SESSION_NOT_FOUND)
         return (key, session)
+    
+    def send_public(self):
+        self.send_header("Public", ", ".join(self.handlers.keys()))
     
     def send_allow(self, session_key, session, stream):
         allow = ["OPTIONS"]
