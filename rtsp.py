@@ -121,44 +121,47 @@ class Handler(BaseHTTPRequestHandler):
     responses = dict(BaseHTTPRequestHandler.responses)  # Extended below
     
     def handle_one_request(self):
-        self.close_connection = True
-        self.request_version = None
-        self.headers = self.MessageClass()
-        self.response_started = False
         try:
-            self.requestline = self.rfile.readline(1000 + 1)
-            if not self.requestline:
-                return
-            if len(self.requestline) > 1000:
-                msg = "Request line too long"
-                raise ErrorResponse(REQUEST_URI_TOO_LONG, msg)
-            
-            self.requestline = self.requestline.decode("latin-1")
-            self.requestline = self.requestline.rstrip("\r\n")
-            split = self.requestline.split(maxsplit=3)
-            self.command, self.path, self.request_version = split[:3]
-            
-            parser = email.parser.BytesFeedParser(_factory=self.MessageClass)
-            for _ in range(200):
-                line = self.rfile.readline(1000 + 1)
-                if len(line) > 1000:
-                    msg = "Request header line too long"
+            self.close_connection = True
+            self.request_version = None
+            self.headers = self.MessageClass()
+            self.response_started = False
+            try:
+                self.requestline = self.rfile.readline(1000 + 1)
+                if not self.requestline:
+                    return
+                if len(self.requestline) > 1000:
+                    msg = "Request line too long"
+                    raise ErrorResponse(REQUEST_URI_TOO_LONG, msg)
+                
+                self.requestline = self.requestline.decode("latin-1")
+                self.requestline = self.requestline.rstrip("\r\n")
+                split = self.requestline.split(maxsplit=3)
+                self.command, self.path, self.request_version = split[:3]
+                
+                parser = email.parser.BytesFeedParser(
+                    _factory=self.MessageClass)
+                for _ in range(200):
+                    line = self.rfile.readline(1000 + 1)
+                    if len(line) > 1000:
+                        code = REQUEST_HEADER_FIELDS_TOO_LARGE
+                        msg = "Request header line too long"
+                        raise ErrorResponse(code, msg)
+                    parser.feed(line)
+                    if not line.rstrip(b"\r\n"):
+                        break
+                else:
+                    msg = "Request header too long"
                     raise ErrorResponse(REQUEST_HEADER_FIELDS_TOO_LARGE, msg)
-                parser.feed(line)
-                if not line.rstrip(b"\r\n"):
-                    break
-            else:
-                msg = "Request header too long"
-                raise ErrorResponse(REQUEST_HEADER_FIELDS_TOO_LARGE, msg)
-            self.headers = parser.close()
+                self.headers = parser.close()
+                
+                self.close_connection = False
+                handler = self.handlers.get(self.command,
+                    type(self).handle_request)
+                handler(self)
             
-            self.close_connection = False
-            handler = self.handlers.get(self.command,
-                type(self).handle_request)
-            handler(self)
-        
-        except ErrorResponse as resp:
-            self.send_error(resp.code, resp.message)
+            except ErrorResponse as resp:
+                self.send_error(resp.code, resp.message)
         except Exception as err:
             self.server.handle_error(self.request, self.client_address)
             if self.response_started:
