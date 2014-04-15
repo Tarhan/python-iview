@@ -185,13 +185,13 @@ class Handler(BaseHTTPRequestHandler):
     def handle_options(self):
         if self.path != "*" and urlsplit(self.path).path:
             try:
-                (key, session) = self.get_session()
-                stream = self.parse_stream()
+                self.parse_session()
+                self.parse_stream()
             except ErrorResponse as resp:
                 self.send_response(resp.code, resp.message)
             else:
                 self.send_response(OK)
-                self.send_allow(key, session, stream)
+                self.send_allow()
         else:
             self.send_response(OK)
         self.send_public()
@@ -205,7 +205,8 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "DESCRIBE")
     def handle_describe(self):
-        if self.parse_stream() is not None:
+        self.parse_stream()
+        if self.stream is not None:
             raise ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
         
         self.send_response(OK)
@@ -216,16 +217,16 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "SETUP")
     def handle_setup(self):
-        (key, session) = self.get_session()
-        stream = self.parse_stream()
-        if stream is None:
+        self.parse_session()
+        self.parse_stream()
+        if self.stream is None:
             if self.server._streams > 1:
                 msg = "{} streams available".format(self.server._streams)
                 raise ErrorResponse(AGGREGATE_OPERATION_NOT_ALLOWED, msg)
-            stream = 0
-        if session.ffmpeg:
+            self.stream = 0
+        if self.session.ffmpeg:
             msg = "SETUP not supported while streaming"
-            self.send_invalidstate(key, session, stream, msg)
+            self.send_invalidstate(msg)
             return
         
         error = None
@@ -302,14 +303,14 @@ class Handler(BaseHTTPRequestHandler):
                     "given")
             raise ErrorResponse(UNSUPPORTED_TRANSPORT, error)
         
-        if key is None:
-            key = random.getrandbits(_SESSION_DIGITS * 4)
-            self.server._sessions[key] = session
+        if self.sessionkey is None:
+            self.sessionkey = random.getrandbits(_SESSION_DIGITS * 4)
+            self.server._sessions[self.sessionkey] = self.session
         dest = self.client_address[0]
-        session.addresses[stream] = (dest, port)
+        self.session.addresses[self.stream] = (dest, port)
         
         self.send_response(OK)
-        self.send_session(key)
+        self.send_session()
         transport = "RTP/AVP/UDP;unicast;destination={};client_port={}-{}"
         transport = transport.format(dest, port, port + 2 - 1)
         self.send_header("Transport", transport)
@@ -326,59 +327,60 @@ class Handler(BaseHTTPRequestHandler):
         TEARDOWN stream + Session: streaming -> 455 + Session + Allow
         TEARDOWN stream + Session: stopped -> 200 + Session
         """
-        stream = self.parse_stream()
+        self.parse_stream()
         try:
-            (key, session) = self.get_session()
+            self.parse_session()
         except ErrorResponse as err:
             msg = err.message
             if msg is None:
                 msg = self.responses.get(err.code)[0]
             raise ErrorResponse(OK, msg)
-        if not key:
+        if self.sessionkey is None:
             raise ErrorResponse(SESSION_NOT_FOUND, "No session given")
         
-        if stream is None:
-            self.server._sessions.pop(key).end()
+        if self.stream is None:
+            self.server._sessions.pop(self.sessionkey).end()
             msg = "Session invalidated"
         else:
-            if session.ffmpeg and session.other_addresses(stream):
+            if (self.session.ffmpeg and
+            self.session.other_addresses(stream)):
                 msg = "Partial TEARDOWN not supported while streaming"
-                self.send_invalidstate(key, session, stream, msg)
+                self.send_invalidstate(msg)
                 return
             
             msg = None
-            if not session.addresses[stream]:
-                msg = "Stream {} not set up".format(stream)
-            session.addresses[stream] = None
-            if not any(session.addresses):
-                self.server._sessions.pop(key).end()
+            if not self.session.addresses[self.stream]:
+                msg = "Stream {} not set up".format(self.stream)
+            self.session.addresses[self.stream] = None
+            if not any(self.session.addresses):
+                self.server._sessions.pop(self.sessionkey).end()
                 msg = "Session invalidated"
         self.send_response(OK, msg)
-        if key in self.server._sessions:
-            self.send_session(key)
+        if self.sessionkey in self.server._sessions:
+            self.send_session()
         self.end_headers()
     
     @setitem(handlers, "PLAY")
     def handle_play(self):
-        (key, session) = self.get_session()
-        if not key:
+        self.parse_session()
+        if self.sessionkey is None:
             raise ErrorResponse(SESSION_NOT_FOUND, "No session given")
-        addresses = session.addresses
-        stream = self.parse_stream()
-        if stream is not None:
-            if not addresses[stream]:
-                msg = "Stream {} not set up".format(stream)
-                self.send_invalidstate(key, session, stream, msg)
+        addresses = self.session.addresses
+        self.parse_stream()
+        if self.stream is not None:
+            if not addresses[self.stream]:
+                msg = "Stream {} not set up".format(self.stream)
+                self.send_invalidstate(msg)
                 return
-            if session.other_addresses(stream):
+            if self.session.other_addresses(self.stream):
                 raise ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
-        if session.ffmpeg:
+        if self.session.ffmpeg:
             raise ErrorResponse(OK, "Already playing")
         
         options = ("-re",)
         streams = ((type, address) for (type, address) in
             zip(self.server._streamtypes, addresses) if address)
-        session.ffmpeg = self.server._ffmpeg(
+        self.session.ffmpeg = self.server._ffmpeg(
             self.server._file, options, streams, stdout=subprocess.DEVNULL)
         self.send_response(OK)
         self.end_headers()
@@ -390,56 +392,58 @@ class Handler(BaseHTTPRequestHandler):
     def parse_stream(self):
         path = urlsplit(self.path).path.lstrip("/")
         if not path:
-            return None
+            stream = None
+            return
         try:
-            stream = int(path)
+            self.stream = int(path)
         except ValueError as err:
             raise ErrorResponse(NOT_FOUND, err)
-        if stream not in range(self.server._streams):
+        if self.stream not in range(self.server._streams):
             msg = "Stream number out of range 0-{}"
             msg = msg.format(self.server._streams - 1)
             raise ErrorResponse(NOT_FOUND, msg)
-        return stream
     
-    def get_session(self):
+    def parse_session(self):
         key = self.headers.get("Session")
         if key is None:
-            return (None, Session(self.server._streams))
+            self.session = Session(self.server._streams)
+            self.sessionkey = None
+            return
         try:
-            key = int(key, 16)
+            self.sessionkey = int(key, 16)
         except ValueError as err:
             raise ErrorResponse(SESSION_NOT_FOUND, err)
-        session = self.server._sessions.get(key)
-        if session is None:
+        self.session = self.server._sessions.get(self.sessionkey)
+        if self.session is None:
             raise ErrorResponse(SESSION_NOT_FOUND)
-        return (key, session)
     
     def send_public(self):
         self.send_header("Public", ", ".join(self.handlers.keys()))
     
-    def send_allow(self, session_key, session, stream):
+    def send_allow(self):
         allow = ["OPTIONS"]
-        if stream is None:
+        if self.stream is None:
             allow.append("DESCRIBE")
-        singlestream = stream is not None or self.server._streams <= 1
-        if singlestream and not session.ffmpeg:
+        singlestream = self.stream is not None or self.server._streams <= 1
+        if singlestream and self.session and not self.session.ffmpeg:
             allow.append("SETUP")
-        if session_key is not None:
-            allstreams = (stream is None or session.addresses[stream] and
-                not session.other_addresses(stream))
-            if allstreams or not session.ffmpeg:
+        if self.sessionkey is not None:
+            allstreams = (self.stream is None or
+                self.session.addresses[self.stream] and
+                not self.session.other_addresses(self.stream))
+            if allstreams or not self.session.ffmpeg:
                 allow.append("TEARDOWN")
             if allstreams:
                 allow.append("PLAY")
         self.send_header("Allow", ", ".join(allow))
     
-    def send_session(self, key):
-        key = format(key, "0{}X".format(_SESSION_DIGITS))
+    def send_session(self):
+        key = format(self.sessionkey, "0{}X".format(_SESSION_DIGITS))
         self.send_header("Session", key)
     
-    def send_invalidstate(self, key, session, stream, msg=None):
+    def send_invalidstate(self, msg=None):
         self.send_response(METHOD_NOT_VALID_IN_THIS_STATE, msg)
-        self.send_allow(key, session, stream)
+        self.send_allow()
         self.end_headers()
 
 for (code, message) in (
