@@ -49,20 +49,21 @@ class Server(HTTPServer):
             
             streams = 0
             while line:
-                if not line.strip():
+                end = not line.strip()
+                if (end or line.startswith(b"m=")) and streams:
+                    control = "a=control:{}\r\n".format(streams - 1)
+                    sdp.write(control.encode("ascii"))
+                if end:
                     break
+                
                 if line.startswith(b"m="):
                     fields = line.split(maxsplit=2)
                     PORT = 1
                     fields[PORT] = b"0"  # VLC hangs or times out otherwise
                     line = b" ".join(fields)
+                    streams += 1
                 if not line.startswith(b"a=control:"):
                     sdp.write(line)
-                
-                if line.startswith(b"m="):
-                    line = "a=control:{}\r\n".format(streams)
-                    streams += 1
-                    sdp.write(line.encode("ascii"))
                 
                 line = ffmpeg.stdout.readline()
             else:
