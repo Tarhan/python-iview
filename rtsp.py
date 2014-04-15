@@ -219,7 +219,10 @@ class Handler(BaseHTTPRequestHandler):
         (key, session) = self.get_session()
         stream = self.parse_stream()
         if stream is None:
-            raise ErrorResponse(AGGREGATE_OPERATION_NOT_ALLOWED)
+            if self.server._streams > 1:
+                msg = "{} streams available".format(self.server._streams)
+                raise ErrorResponse(AGGREGATE_OPERATION_NOT_ALLOWED, msg)
+            stream = 0
         if session.ffmpeg:
             msg = "SETUP not supported while streaming"
             self.send_invalidstate(key, session, stream, msg)
@@ -389,7 +392,8 @@ class Handler(BaseHTTPRequestHandler):
         allow = ["OPTIONS"]
         if stream is None:
             allow.append("DESCRIBE")
-        if stream is not None and not session.ffmpeg:
+        singlestream = stream is not None or self.server._streams <= 1
+        if singlestream and not session.ffmpeg:
             allow.append("SETUP")
         if session_key is not None:
             allstreams = (stream is None or session.addresses[stream] and
