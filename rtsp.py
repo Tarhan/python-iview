@@ -16,6 +16,8 @@ import subprocess
 import sys
 import random
 from functions import attributes
+from collections.abc import Mapping
+import urllib.parse
 
 RTSP_PORT = 554
 
@@ -208,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             if self.plainpath:
-                self.parse_stream()
+                self.parse_path()
             try:
                 self.parse_session()
                 self.send_response(OK)
@@ -234,13 +236,24 @@ class Handler(BaseHTTPRequestHandler):
         DESCRIBE stream -> 460 + [Session +] Allow
         DESCRIBE path -> 200 + entity
         """
-        self.parse_stream()
+        self.parse_path()
         if self.stream is not None:
             raise ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
         
         self.send_response(OK)
         self.send_header("Content-Type", "application/sdp")
         self.send_header("Content-Length", len(self.server._sdp))
+        
+        location = list()
+        encoding = EncodeMap("%#?/")
+        for elem in self.media:
+            elem = elem.translate(encoding)
+            if elem in {".", ".."}:
+                elem = "%2E" + elem[1:]
+            location.append(elem + "/")
+        location = "/" + "".join(location)
+        self.send_header("Content-Location", location)
+        
         self.end_headers()
         self.wfile.write(self.server._sdp)
     
@@ -256,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
         SETUP stream [+ Session] + Transport -> 200 + Session + Transport
         """
         self.parse_session()
-        self.parse_stream()
+        self.parse_path()
         if self.stream is None:
             if self.server._streams > 1:
                 msg = "{} streams available".format(self.server._streams)
@@ -366,7 +379,7 @@ class Handler(BaseHTTPRequestHandler):
         TEARDOWN stream + Session: stopped -> 200 + Session
         """
         if self.plainpath:
-            self.parse_stream()
+            self.parse_path()
         else:
             self.stream = None
         try:
@@ -416,7 +429,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         self.parse_session()
         if self.plainpath:
-            self.parse_stream()
+            self.parse_path()
         else:
             self.stream = None
         if self.sessionkey is None:
@@ -447,24 +460,40 @@ class Handler(BaseHTTPRequestHandler):
     #~ def handle_pause(self):
         #~ return self.handle_request()
     
-    def parse_stream(self):
-        if not self.plainpath:
+    def parse_path(self):
+        """Parse path into media path and possible stream number"""
+        path = self.plainpath
+        if not path:
             msg = "Method {} does not accept null path".format(self.command)
             raise ErrorResponse(METHOD_NOT_ALLOWED, msg)
         
-        media = True
-        path = self.plainpath.lstrip("/")
-        if not path:
-            stream = None
-            return
         try:
-            self.stream = int(path)
+            if path.startswith("/"):
+                path = path[1:]
+            self.media = list()
+            isdir = True  # Remember if the normal path ends with a slash
+            for elem in path.split("/"):
+                isdir = True  # Default unless special value not found
+                if elem == "..":
+                    if self.media:
+                        self.media.pop()
+                elif elem not in {"", "."}:
+                    elem = urllib.parse.unquote(elem,
+                        "ascii", "surrogateescape")
+                    self.media.append(elem)
+                    isdir = False
+            
+            if isdir:
+                self.stream = None
+            else:
+                self.stream = int(self.media.pop())
+                if self.stream not in range(self.server._streams):
+                    msg = "Stream number out of range 0-{}"
+                    msg = msg.format(self.server._streams - 1)
+                    raise ErrorResponse(NOT_FOUND, msg)
+        
         except ValueError as err:
             raise ErrorResponse(NOT_FOUND, err)
-        if self.stream not in range(self.server._streams):
-            msg = "Stream number out of range 0-{}"
-            msg = msg.format(self.server._streams - 1)
-            raise ErrorResponse(NOT_FOUND, msg)
     
     def parse_session(self):
         self.sessionparsed = True
@@ -488,7 +517,7 @@ class Handler(BaseHTTPRequestHandler):
     def send_allow(self):
         if self.plainpath and self.media is None:
             try:
-                self.parse_stream()
+                self.parse_path()
             except ErrorResponse:
                 pass
         if not self.sessionparsed:
@@ -556,6 +585,26 @@ class ErrorResponse(Exception):
         self.code = code
         self.message = message
         Exception.__init__(self, self.code)
+
+class EncodeMap(Mapping):
+    surrogates = range(0xDC80, 0xDD00)
+    controls = range(0x20 + 1)
+    def __init__(self, reserved):
+        self.encode = set(map(ord, reserved))
+        self.encode.update(map(ord, "<>"))
+        self.encode.add(0x7F)
+    def __getitem__(self, cp):
+        if cp in self.surrogates:
+            cp -= 0xDC00
+        elif cp not in self.encode and cp not in self.controls:
+            raise KeyError()
+        return "%{:02X}".format(cp)
+    def __len__(self):
+        return len(self.reserved) + len(self.surrogates) + len(self.controls)
+    def __iter__(self):
+        yield from self.encode
+        yield from self.controls
+        yield from self.surrogates
 
 @attributes(param_types=dict(port=int))
 def main(file, port=RTSP_PORT, *, noffmpeg2=False):
