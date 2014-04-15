@@ -305,10 +305,13 @@ class Handler(BaseHTTPRequestHandler):
         if key is None:
             key = random.getrandbits(_SESSION_DIGITS * 4)
             self.server._sessions[key] = session
-        session.addresses[stream] = (self.client_address[0], port)
+        dest = self.client_address[0]
+        session.addresses[stream] = (dest, port)
         
         self.send_response(OK)
         self.send_session(key)
+        transport = "RTP/AVP/UDP;unicast;destination={};client_port={}-{}"
+        transport = transport.format(dest, port, port + 2 - 1)
         self.send_header("Transport", transport)
         self.end_headers()
     
