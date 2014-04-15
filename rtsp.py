@@ -18,6 +18,7 @@ import random
 from functions import attributes
 from collections.abc import Mapping
 import urllib.parse
+from misc import formataddr, urlbuild
 
 RTSP_PORT = 554
 
@@ -113,10 +114,7 @@ class Server(HTTPServer):
                 # although only after outputting the SDP data,
                 # and "libav" does not emit the error.
                 address = ("localhost", 6970 + i * 2)
-            (host, port) = address
-            if ":" in host:
-                host = "[{}]".format(host)
-            cmd.append("rtp://{}:{}".format(host, port))
+            cmd.append(urlbuild("rtp", formataddr(address)))
             
             if not self._ffmpeg2 and i:
                 cmd += ("-new" + type,)
@@ -257,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
                 elem = "%2E" + elem[1:]
             location.append(elem + "/")
         location = "/" + "".join(location)
-        self.send_header("Content-Location", location)
+        self.send_header("Content-Location", urlbuild(path=location))
         
         self.end_headers()
         self.wfile.write(self.server._sdp)
