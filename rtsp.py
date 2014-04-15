@@ -1,7 +1,7 @@
 from calltrace import traced
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlsplit
+from urllib.parse import urlparse
 #~ import socketserver
 from http.client import (
     REQUEST_URI_TOO_LONG, NOT_FOUND, REQUEST_HEADER_FIELDS_TOO_LARGE,
@@ -140,6 +140,10 @@ class Handler(BaseHTTPRequestHandler):
                 split = self.requestline.split(maxsplit=3)
                 self.command, self.path, self.request_version = split[:3]
                 
+                self.plainpath = urlparse(self.path).path
+                if self.plainpath == "*":
+                    self.plainpath = None
+                
                 parser = email.parser.BytesFeedParser(
                     _factory=self.MessageClass)
                 for _ in range(200):
@@ -197,24 +201,22 @@ class Handler(BaseHTTPRequestHandler):
     @setitem(handlers, "OPTIONS")
     def handle_options(self):
         """
-        OPTIONS * -> 200 + Public
         OPTIONS bad-path -> 404 + Public
         OPTIONS + Session: bad -> 454 + Allow + Public
+        OPTIONS * [+ Session] -> 200 + [Session +] Allow + Public
         OPTIONS path [+ Session] -> 200 + [Session +] Allow + Public
         """
-        if self.path != "*" and urlsplit(self.path).path:
-            try:
+        try:
+            if self.plainpath:
                 self.parse_stream()
-                try:
-                    self.parse_session()
-                    self.send_response(OK)
-                except ErrorResponse as resp:
-                    self.send_response(resp.code, resp.message)
-                self.send_allow()
+            try:
+                self.parse_session()
+                self.send_response(OK)
             except ErrorResponse as err:
                 self.send_response(err.code, err.message)
-        else:
-            self.send_response(OK)
+            self.send_allow()
+        except ErrorResponse as err:
+            self.send_response(err.code, err.message)
         self.send_public()
         self.end_headers()
     
@@ -226,6 +228,12 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "DESCRIBE")
     def handle_describe(self):
+        """
+        DESCRIBE * -> 405 + [Session +] Allow
+        DESCRIBE bad-path -> 404
+        DESCRIBE stream -> 460 + [Session +] Allow
+        DESCRIBE path -> 200 + entity
+        """
         self.parse_stream()
         if self.stream is not None:
             raise ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
@@ -242,6 +250,7 @@ class Handler(BaseHTTPRequestHandler):
         SETUP + Session: bad -> 454
         SETUP bad-path -> 404
         SETUP + Session: streaming -> 455 + Session + Allow
+        SETUP * [+ Session] -> 405 + [Session +] Allow
         SETUP aggregate [+ Session] -> 459 + [Session +] Allow
         SETUP stream [+ Session] + Transport: bad -> 461
         SETUP stream [+ Session] + Transport -> 200 + Session + Transport
@@ -350,12 +359,16 @@ class Handler(BaseHTTPRequestHandler):
         TEARDOWN bad-path -> 404
         TEARDOWN + Session: bad -> 200 "Session not found"
         TEARDOWN (no Session) -> 454 + Allow
+        TEARDOWN * -> 200 "Session invalidated"
         TEARDOWN path/new-stream -> 200 "Not set up"
         TEARDOWN lone-stream -> 200 "Session invalidated"
         TEARDOWN stream + Session: streaming -> 455 + Session + Allow
         TEARDOWN stream + Session: stopped -> 200 + Session
         """
-        self.parse_stream()
+        if self.plainpath:
+            self.parse_stream()
+        else:
+            self.stream = None
         try:
             self.parse_session()
         except ErrorResponse as err:
@@ -396,12 +409,16 @@ class Handler(BaseHTTPRequestHandler):
         PLAY + Session: bad -> 454
         PLAY bad-path -> 404
         PLAY (no Session) -> 454 + Allow
+        PLAY * -> 200 + Session
         PLAY new-stream -> 455 + Session + Allow
         PLAY lone-stream -> 200 + Session
         PLAY stream -> 460 + Session + Allow
         """
         self.parse_session()
-        self.parse_stream()
+        if self.plainpath:
+            self.parse_stream()
+        else:
+            self.stream = None
         if self.sessionkey is None:
             self.send_response(SESSION_NOT_FOUND, "No session given")
             self.send_allow()
@@ -431,8 +448,12 @@ class Handler(BaseHTTPRequestHandler):
         #~ return self.handle_request()
     
     def parse_stream(self):
+        if not self.plainpath:
+            msg = "Method {} does not accept null path".format(self.command)
+            raise ErrorResponse(METHOD_NOT_ALLOWED, msg)
+        
         media = True
-        path = urlsplit(self.path).path.lstrip("/")
+        path = self.plainpath.lstrip("/")
         if not path:
             stream = None
             return
@@ -465,7 +486,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Public", ", ".join(self.handlers.keys()))
     
     def send_allow(self):
-        if self.media is None:
+        if self.plainpath and self.media is None:
             try:
                 self.parse_stream()
             except ErrorResponse:
