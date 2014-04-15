@@ -51,6 +51,11 @@ class Server(HTTPServer):
             while line:
                 if not line.strip():
                     break
+                if line.startswith(b"m="):
+                    fields = line.split(maxsplit=2)
+                    PORT = 1
+                    fields[PORT] = b"0"  # VLC hangs or times out otherwise
+                    line = b" ".join(fields)
                 if not line.startswith(b"a=control:"):
                     sdp.write(line)
                 
@@ -93,8 +98,7 @@ class Server(HTTPServer):
         cmd.extend(options)
         cmd.extend(("-i", file))
         
-        first = True
-        for (type, address) in streams:
+        for (i, (type, address)) in enumerate(streams):
             t = type[0]
             if self._ffmpeg2:
                 cmd.extend(("-map", "0:" + t))
@@ -103,17 +107,17 @@ class Server(HTTPServer):
                 other in self._streamtypes if other != type)
             
             cmd.extend(("-f", "rtp"))
-            if address:
-                (host, port) = address
-                if ":" in host:
-                    host = "[{}]".format(host)
-                cmd.append("rtp://{}:{}".format(host, port))
-            elif self._ffmpeg2:
-                cmd.append("rtp://localhost:1")
-            else:
-                cmd.append("rtp://localhost")
+            if not address:
+                # Avoid null or zero port because FF MPEG emits an error,
+                # although only after outputting the SDP data,
+                # and "libav" does not emit the error.
+                address = ("localhost", 6970 + i * 2)
+            (host, port) = address
+            if ":" in host:
+                host = "[{}]".format(host)
+            cmd.append("rtp://{}:{}".format(host, port))
             
-            if not self._ffmpeg2 and not first:
+            if not self._ffmpeg2 and i:
                 cmd += ("-new" + type,)
             first = False
         
