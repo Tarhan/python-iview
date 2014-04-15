@@ -317,27 +317,43 @@ class Handler(BaseHTTPRequestHandler):
     
     @setitem(handlers, "TEARDOWN")
     def handle_teardown(self):
-        (key, session) = self.get_session()
+        """
+        TEARDOWN bad-path -> 404
+        TEARDOWN + Session: bad -> 200 "Session not found"
+        TEARDOWN (no Session) -> 454 + Allow
+        TEARDOWN path/new-stream -> 200 "Not set up"
+        TEARDOWN lone-stream -> 200 "Session invalidated"
+        TEARDOWN stream + Session: streaming -> 455 + Session + Allow
+        TEARDOWN stream + Session: stopped -> 200 + Session
+        """
+        stream = self.parse_stream()
+        try:
+            (key, session) = self.get_session()
+        except ErrorResponse as err:
+            msg = err.message
+            if msg is None:
+                msg = self.responses.get(err.code)[0]
+            raise ErrorResponse(OK, msg)
         if not key:
             raise ErrorResponse(SESSION_NOT_FOUND, "No session given")
-        stream = self.parse_stream()
+        
         if stream is None:
             self.server._sessions.pop(key).end()
+            msg = "Session invalidated"
         else:
-            msg = None
-            if not session.addresses[stream]:
-                msg = "Stream {} not set up".format(stream)
-            elif session.ffmpeg and session.other_addresses(stream):
+            if session.ffmpeg and session.other_addresses(stream):
                 msg = "Partial TEARDOWN not supported while streaming"
-            if msg:
                 self.send_invalidstate(key, session, stream, msg)
                 return
             
+            msg = None
+            if not session.addresses[stream]:
+                msg = "Stream {} not set up".format(stream)
             session.addresses[stream] = None
             if not any(session.addresses):
                 self.server._sessions.pop(key).end()
-        
-        self.send_response(OK)
+                msg = "Session invalidated"
+        self.send_response(OK, msg)
         if key in self.server._sessions:
             self.send_session(key)
         self.end_headers()
@@ -357,9 +373,7 @@ class Handler(BaseHTTPRequestHandler):
             if session.other_addresses(stream):
                 raise ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
         if session.ffmpeg:
-            msg = "PLAY not supported while already streaming"
-            self.send_invalidstate(key, session, stream, msg)
-            return
+            raise ErrorResponse(OK, "Already playing")
         
         options = ("-re",)
         streams = ((type, address) for (type, address) in
@@ -413,10 +427,9 @@ class Handler(BaseHTTPRequestHandler):
         if session_key is not None:
             allstreams = (stream is None or session.addresses[stream] and
                 not session.other_addresses(stream))
-            if (allstreams or
-            session.addresses[stream] and not session.ffmpeg):
+            if allstreams or not session.ffmpeg:
                 allow.append("TEARDOWN")
-            if not session.ffmpeg and allstreams:
+            if allstreams:
                 allow.append("PLAY")
         self.send_header("Allow", ", ".join(allow))
     
