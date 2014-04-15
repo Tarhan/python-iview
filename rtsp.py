@@ -228,67 +228,79 @@ class Handler(BaseHTTPRequestHandler):
             self.send_invalidstate(key, session, stream, msg)
             return
         
+        error = None
         for transports in self.headers.get_all("Transport", ()):
             if '"' in transports:
-                continue  # Parsing quotes not implemented
+                multierror = error
+                error = "Parsing quotes not implemented"
+                continue
             
             for transport in transports.split(","):
-                transport = transport.strip()
-                
-                params = transport.split(";")
-                udp = params[0].strip() in {"RTP/AVP", "RTP/AVP/UDP"}
-                
-                unicast = False
-                port = None
-                interleaved = None
-                ilstart = None
-                for param in params[1:]:
-                    (name, _, value) = param.partition("=")
-                    name = name.strip()
-                    value = value.strip()
+                try:
+                    transport = transport.strip()
                     
-                    unicast = unicast or name == "unicast" and not value
-                    if (name == "mode" and value and
-                    frozenset((value,)) != {"PLAY"}):  # TODO: parse comma-separated list
-                        break
+                    params = transport.split(";")
+                    udp = params[0].strip() in {"RTP/AVP", "RTP/AVP/UDP"}
                     
-                    if name == "interleaved":
-                        interleaved = True
-                        if ilstart is not None:
-                            break
-                        (ilstart, _, end) = value.partition("-")
-                        try:
+                    unicast = False
+                    port = None
+                    interleaved = None
+                    ilstart = None
+                    for param in params[1:]:
+                        (name, _, value) = param.partition("=")
+                        name = name.strip()
+                        value = value.strip()
+                        
+                        unicast = unicast or name == "unicast" and not value
+                        if (name == "mode" and value and
+                        frozenset((value,)) != {"PLAY"}):  # TODO: parse comma-separated list
+                            raise ValueError("Only mode=PLAY supported")
+                        
+                        if name == "interleaved":
+                            interleaved = True
+                            if ilstart is not None:
+                                msg = 'Multiple "interleaved" parameters'
+                                raise ValueError(msg)
+                            (ilstart, _, end) = value.partition("-")
                             ilstart = int(ilstart)
                             if end and int(end) != ilstart + 1:
-                                break
-                        except ValueError:
-                            break
-                    
-                    if name == "client_port" and value:
-                        if port is not None:
-                            break
-                        (port, _, end) = value.partition("-")
-                        try:
+                                msg = "Only pair of channels supported"
+                                raise ValueError(msg)
+                        
+                        if name == "client_port" and value:
+                            if port is not None:
+                                msg = 'Multiple "client_port" parameters'
+                                raise ValueError(msg)
+                            (port, _, end) = value.partition("-")
                             port = int(port)
                             if end and int(end) != port + 1:
-                                break
-                        except ValueError:
-                            break
-                
-                else:
+                                msg = "Only pair of ports supported"
+                                raise ValueError(msg)
+                    
                     if interleaved:
-                        if ilstart is not None:
-                            msg = "Interleaved transport not yet implemented"
-                            raise ErrorResponse(UNSUPPORTED_TRANSPORT, msg)
-                    elif udp and unicast and port is not None:
+                        if ilstart is None:
+                            raise ValueError("Interleaved channel not given")
+                        msg = "Interleaved transport not yet implemented"
+                        raise ValueError(msg)
+                    if udp and unicast:
+                        if port is None:
+                            raise ValueError("Unicast UDP port not given")
                         break
-            
-            else:
+                    msg = ("Only unicast UDP and interleaved transports "
+                        "supported")
+                    raise ValueError(msg)
+                
+                except ValueError as exc:
+                    multierror = error
+                    error = format(exc)
+            else:  # No suitable transport found
                 continue
-            break
-        else:
-            msg = "No supported unicast UDP or interleaved transport given"
-            raise ErrorResponse(UNSUPPORTED_TRANSPORT, msg)
+            break  # Stopped on suitable transport
+        else:  # No suitable transport found
+            if not error or multierror:
+                error = ("No supported unicast UDP or interleaved transport "
+                    "given")
+            raise ErrorResponse(UNSUPPORTED_TRANSPORT, error)
         
         if key is None:
             key = random.getrandbits(_SESSION_DIGITS * 4)
