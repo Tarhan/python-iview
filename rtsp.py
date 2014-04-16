@@ -140,9 +140,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ErrorResponse(REQUEST_URI_TOO_LONG, msg)
                 
                 self.requestline = self.requestline.decode("latin-1")
-                self.requestline = self.requestline.rstrip("\r\n")
-                split = self.requestline.split(maxsplit=3)
-                self.command, self.path, self.request_version = split[:3]
+                self.requestline = self.requestline.strip()
+                (self.command, rest) = self.requestline.split(maxsplit=1)
+                rest = rest.rsplit(maxsplit=1)
+                if len(rest) >= 2:
+                    (self.path, self.request_version) = rest
+                else:
+                    (self.path,) = rest
+                    self.request_version = None
                 
                 self.plainpath = urlparse(self.path).path
                 if self.plainpath == "*":
