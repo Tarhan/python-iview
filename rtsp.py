@@ -270,7 +270,11 @@ class Handler(BaseHTTPRequestHandler):
                 elem = "%2E" + elem[1:]
             location.append(elem + "/")
         location = "/" + "".join(location)
-        self.send_header("Content-Location", urlbuild(path=location))
+        location = urlbuild("rtsp", self.server.server_address, location)
+        
+        # Send Content-Base
+        # because many clients (FF MPEG) ignore Content-Location
+        self.send_header("Content-Base", location)
         
         self.end_headers()
         self.wfile.write(sdp)
