@@ -319,7 +319,10 @@ class Handler(BaseHTTPRequestHandler):
                     transport = transport.strip()
                     
                     params = transport.split(";")
-                    udp = params[0].strip() in {"RTP/AVP", "RTP/AVP/UDP"}
+                    spec = params[0].strip().upper().split("/", 2)
+                    if spec[:2] != ["RTP", "AVP"]:
+                        raise ValueError("Only RTP/AVP supported")
+                    udp = len(spec) <= 2 or spec[2] == "UDP"
                     
                     unicast = False
                     port = None
@@ -329,13 +332,14 @@ class Handler(BaseHTTPRequestHandler):
                         (name, _, value) = param.partition("=")
                         name = name.strip()
                         value = value.strip()
+                        lname = name.lower()
                         
-                        unicast = unicast or name == "unicast" and not value
-                        if (name == "mode" and value and
-                        frozenset((value,)) != {"PLAY"}):  # TODO: parse comma-separated list
+                        unicast = unicast or lname == "unicast" and not value
+                        if (lname == "mode" and value and
+                        frozenset((value.upper(),)) != {"PLAY"}):  # TODO: parse comma-separated list
                             raise ValueError("Only mode=PLAY supported")
                         
-                        if name == "interleaved":
+                        if lname == "interleaved":
                             interleaved = True
                             if ilstart is not None:
                                 msg = 'Multiple "interleaved" parameters'
@@ -346,7 +350,7 @@ class Handler(BaseHTTPRequestHandler):
                                 msg = "Only pair of channels supported"
                                 raise ValueError(msg)
                         
-                        if name == "client_port" and value:
+                        if lname == "client_port" and value:
                             if port is not None:
                                 msg = 'Multiple "client_port" parameters'
                                 raise ValueError(msg)
@@ -386,8 +390,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.session is None:
             self.sessionkey = random.getrandbits(_SESSION_DIGITS * 4)
             self.server._sessions[self.sessionkey] = session
+            msg = "Session created"
+        else:
+            msg = None
         
-        self.send_response(OK)
+        self.send_response(OK, msg)
         self.send_session()
         transport = "RTP/AVP/UDP;unicast;destination={};client_port={}-{}"
         transport = transport.format(dest, port, port + 2 - 1)
