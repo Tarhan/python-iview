@@ -32,6 +32,12 @@ class Server(HTTPServer):
         self._ffmpeg2 = ffmpeg2
         self._sessions = dict()
         HTTPServer.__init__(self, address, Handler)
+        port = self.server_port
+        if port == RTSP_PORT:
+            port = None
+        
+        self.server_address = (self.server_name, self.server_port)
+        self.server_address = formataddr(self.server_address)
     
     def _get_sdp(self, file):
         options = ("-t", "0")  # Stop before processing any video
