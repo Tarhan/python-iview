@@ -286,7 +286,7 @@ class Handler(BaseHTTPRequestHandler):
         SETUP new-path + Session -> 455 + Session + Allow
         SETUP bad-path -> 404
         SETUP + Session: streaming -> 455 + Session + Allow
-        SETUP * [+ Session] -> 405 + [Session +] Allow
+        SETUP * (no Session) -> 455 + Allow
         SETUP aggregate [+ Session] -> 459 + [Session +] Allow
         SETUP stream [+ Session] + Transport: bad -> 461
         SETUP stream [+ Session] + Transport -> 200 + Session + Transport
@@ -294,6 +294,9 @@ class Handler(BaseHTTPRequestHandler):
         self.parse_session()
         self.parse_session_path()
         if self.session is None:
+            if not self.plainpath:
+                msg = "No media or session specified"
+                raise ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE, msg)
             session = Session(self.media, self.ospath, self.streams)
         else:
             session = self.session
@@ -408,7 +411,6 @@ class Handler(BaseHTTPRequestHandler):
         TEARDOWN bad-path -> 404
         TEARDOWN + Session: bad -> 200 "Session not found"
         TEARDOWN (no Session) -> 454 + Allow
-        TEARDOWN * -> 200 "Session invalidated"
         TEARDOWN path/new-stream -> 200 "Not set up"
         TEARDOWN lone-stream -> 200 "Session invalidated"
         TEARDOWN stream + Session: streaming -> 455 + Session + Allow
@@ -420,10 +422,7 @@ class Handler(BaseHTTPRequestHandler):
             msg = err.message
             if msg is None:
                 msg = self.responses.get(err.code)[0]
-        if self.plainpath:
-            self.parse_session_path()
-        else:
-            self.stream = None
+        self.parse_session_path()
         if self.invalidsession:
             raise ErrorResponse(OK, msg)
         if not self.session:
@@ -460,16 +459,12 @@ class Handler(BaseHTTPRequestHandler):
         PLAY new-path -> 455 + Session + Allow
         PLAY bad-path -> 404
         PLAY (no Session) -> 454 + Allow
-        PLAY * -> 200 + Session
         PLAY new-stream -> 455 + Session + Allow
         PLAY lone-stream -> 200 + Session
         PLAY stream -> 460 + Session + Allow
         """
         self.parse_session()
-        if self.plainpath:
-            self.parse_session_path()
-        else:
-            self.stream = None
+        self.parse_session_path()
         if not self.session:
             self.send_response(SESSION_NOT_FOUND, "No session given")
             self.send_allow()
@@ -538,6 +533,9 @@ class Handler(BaseHTTPRequestHandler):
         return sdp
     
     def parse_session_path(self):
+        if not self.plainpath:
+            self.stream = None
+            return
         self.parse_path()
         if self.session:
             if self.media != self.session.media:
@@ -605,9 +603,11 @@ class Handler(BaseHTTPRequestHandler):
                 allow.append("DESCRIBE")
             
             singlestream = self.stream is not None or self.streams <= 1
-            if (mediamatch and singlestream and not self.invalidsession and
-            not streaming):
-                allow.append("SETUP")
+        else:
+            singlestream = self.session and len(self.session.addresses) <= 1
+        if (mediamatch and singlestream and not self.invalidsession and
+        not streaming):
+            allow.append("SETUP")
         
         if (self.invalidsession or
         self.session and mediamatch and (allstreams or not streaming)):
