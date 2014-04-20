@@ -130,6 +130,7 @@ class Server(HTTPServer):
         return subprocess.Popen(cmd, **popenargs)
 
 class Handler(BaseHTTPRequestHandler):
+    server_version = "RTSP-server " + BaseHTTPRequestHandler.server_version
     protocol_version = "RTSP/1.0"
     responses = dict(BaseHTTPRequestHandler.responses)  # Extended below
     
