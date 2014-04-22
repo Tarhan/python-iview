@@ -1,41 +1,25 @@
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse
 #~ import socketserver
-from http.client import (
-    REQUEST_URI_TOO_LONG, NOT_FOUND, REQUEST_HEADER_FIELDS_TOO_LARGE,
-    METHOD_NOT_ALLOWED,
-)
-from http.client import NOT_IMPLEMENTED, INTERNAL_SERVER_ERROR
-from http.client import OK
-import email.parser
+import basehttp
+from http.client import NOT_FOUND, OK
 from functions import setitem
 from io import BytesIO
 import subprocess
-import sys
 import random
 from functions import attributes
-from collections.abc import Mapping
-import urllib.parse
 from misc import formataddr, urlbuild
 from misc import joinpath
 
-RTSP_PORT = 554
-
 _SESSION_DIGITS = 25
 
-#~ class Server(socketserver.ThreadingMixIn, HTTPServer):
-class Server(HTTPServer):
-    def __init__(self, address=("", RTSP_PORT), *, ffmpeg2=True):
+#~ class Server(socketserver.ThreadingMixIn, basehttp.Server):
+class Server(basehttp.Server):
+    default_port = 554
+    
+    def __init__(self, address=("", None), *, ffmpeg2=True):
         """ffmpeg2: Assume FF MPEG 2.1 rather than libav 0.8.6"""
         self._ffmpeg2 = ffmpeg2
         self._sessions = dict()
-        HTTPServer.__init__(self, address, Handler)
-        port = self.server_port
-        if port == RTSP_PORT:
-            port = None
-        
-        self.server_address = (self.server_name, self.server_port)
-        self.server_address = formataddr(self.server_address)
+        super().__init__(address, Handler)
     
     def _get_sdp(self, file):
         options = ("-t", "0")  # Stop before processing any video
@@ -79,19 +63,11 @@ class Server(HTTPServer):
                 raise EnvironmentError(msg.format(ffmpeg.returncode))
         return (sdp.getvalue(), streams)
     
-    def handle_error(*pos, **kw):
-        exc = sys.exc_info()[0]
-        if issubclass(exc, ConnectionError):
-            return
-        if not issubclass(exc, Exception):
-            raise  # Force server loop to exit
-        HTTPServer.handle_error(*pos, **kw)
-    
     def server_close(self, *pos, **kw):
         while self._sessions:
             (_, session) = self._sessions.popitem()
             session.end()
-        return HTTPServer.server_close(self, *pos, **kw)
+        return basehttp.Server.server_close(self, *pos, **kw)
     
     _streamtypes = ("video", "audio")
     
@@ -127,89 +103,19 @@ class Server(HTTPServer):
         
         return subprocess.Popen(cmd, **popenargs)
 
-class Handler(BaseHTTPRequestHandler):
-    server_version = "RTSP-server " + BaseHTTPRequestHandler.server_version
+class Handler(basehttp.RequestHandler):
+    server_version = "RTSP-server " + basehttp.RequestHandler.server_version
     protocol_version = "RTSP/1.0"
-    responses = dict(BaseHTTPRequestHandler.responses)  # Extended below
+    scheme = "rtsp"
     
-    def handle_one_request(self):
-        try:
-            self.close_connection = True
-            self.request_version = None
-            self.headers = self.MessageClass()
-            self.response_started = False
-            try:
-                self.requestline = self.rfile.readline(1000 + 1)
-                if not self.requestline:
-                    return
-                if len(self.requestline) > 1000:
-                    msg = "Request line too long"
-                    raise ErrorResponse(REQUEST_URI_TOO_LONG, msg)
-                
-                self.requestline = self.requestline.decode("latin-1")
-                self.requestline = self.requestline.strip()
-                (self.command, rest) = self.requestline.split(maxsplit=1)
-                rest = rest.rsplit(maxsplit=1)
-                if len(rest) >= 2:
-                    (self.path, self.request_version) = rest
-                else:
-                    (self.path,) = rest
-                    self.request_version = None
-                
-                self.plainpath = urlparse(self.path).path
-                if self.plainpath == "*":
-                    self.plainpath = None
-                
-                parser = email.parser.BytesFeedParser(
-                    _factory=self.MessageClass)
-                for _ in range(200):
-                    line = self.rfile.readline(1000 + 1)
-                    if len(line) > 1000:
-                        code = REQUEST_HEADER_FIELDS_TOO_LARGE
-                        msg = "Request header line too long"
-                        raise ErrorResponse(code, msg)
-                    parser.feed(line)
-                    if not line.rstrip(b"\r\n"):
-                        break
-                else:
-                    msg = "Request header too long"
-                    raise ErrorResponse(REQUEST_HEADER_FIELDS_TOO_LARGE, msg)
-                self.headers = parser.close()
-                
-                self.close_connection = False
-                self.media = None  # Indicates path not parsed
-                self.streams = None  # Indicates media not parsed
-                self.sessionparsed = False
-                handler = self.handlers.get(self.command,
-                    type(self).handle_request)
-                handler(self)
-            
-            except ErrorResponse as resp:
-                self.send_error(resp.code, resp.message)
-        except Exception as err:
-            self.server.handle_error(self.request, self.client_address)
-            if self.response_started:
-                self.close_connection = True
-            else:
-                self.send_error(INTERNAL_SERVER_ERROR, err)
-    
-    def send_error(self, code, message=None):
-        self.send_response(code, message)
-        allow = {
-            METHOD_NOT_ALLOWED,  # Required by specification
-            METHOD_NOT_VALID_IN_THIS_STATE,  # Recommended by specification
-            
-            # Other statuses not suggested by specification
-            AGGREGATE_OPERATION_NOT_ALLOWED,
-            ONLY_AGGREGATE_OPERATION_ALLOWED,
-        }
-        if code in allow:
-            self.send_allow()
-        self.end_headers()
+    def handle_method(self):
+        self.media = None  # Indicates path not parsed
+        self.streams = None  # Indicates media not parsed
+        self.sessionparsed = False
+        basehttp.RequestHandler.handle_method(self)
     
     def send_response(self, *pos, **kw):
-        self.response_started = True
-        BaseHTTPRequestHandler.send_response(self, *pos, **kw)
+        basehttp.RequestHandler.send_response(self, *pos, **kw)
         for cseq in self.headers.get_all("CSeq", ()):
             self.send_header("CSeq", cseq)
     
@@ -230,17 +136,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self.parse_session()
                 self.send_response(OK)
-            except ErrorResponse as err:
+            except basehttp.ErrorResponse as err:
                 self.send_response(err.code, err.message)
             self.send_allow()
-        except ErrorResponse as err:
+        except basehttp.ErrorResponse as err:
             self.send_response(err.code, err.message)
-        self.send_public()
-        self.end_headers()
-    
-    def handle_request(self):
-        msg = 'Request method "{}" not implemented'.format(self.command)
-        self.send_response(NOT_IMPLEMENTED, msg)
         self.send_public()
         self.end_headers()
     
@@ -255,28 +155,8 @@ class Handler(BaseHTTPRequestHandler):
         self.parse_path()
         sdp = self.parse_media()
         if self.stream is not None:
-            raise ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
-        
-        self.send_response(OK)
-        self.send_header("Content-Type", "application/sdp")
-        self.send_header("Content-Length", len(sdp))
-        
-        location = list()
-        encoding = EncodeMap("%#?/")
-        for elem in self.media:
-            elem = elem.translate(encoding)
-            if elem in {".", ".."}:
-                elem = "%2E" + elem[1:]
-            location.append(elem + "/")
-        location = "/" + "".join(location)
-        location = urlbuild("rtsp", self.server.server_address, location)
-        
-        # Send Content-Base
-        # because many clients (FF MPEG) ignore Content-Location
-        self.send_header("Content-Base", location)
-        
-        self.end_headers()
-        self.wfile.write(sdp)
+            raise basehttp.ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
+        self.send_entity("application/sdp", tuple(self.media) + ("",), sdp)
     
     @setitem(handlers, "SETUP")
     def handle_setup(self):
@@ -295,7 +175,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.session is None:
             if not self.plainpath:
                 msg = "No media or session specified"
-                raise ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE, msg)
+                raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE,
+                    msg)
             session = Session(self.media, self.ospath, self.streams)
         else:
             session = self.session
@@ -303,11 +184,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.stream is None:
             if self.streams > 1:
                 msg = "{} streams available".format(self.streams)
-                raise ErrorResponse(AGGREGATE_OPERATION_NOT_ALLOWED, msg)
+                raise basehttp.ErrorResponse(AGGREGATE_OPERATION_NOT_ALLOWED,
+                    msg)
             self.stream = 0
         if session.ffmpeg:
             msg = "SETUP not supported while streaming"
-            raise ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE, msg)
+            raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE, msg)
         
         error = None
         for transports in self.headers.get_all("Transport", ()):
@@ -385,7 +267,7 @@ class Handler(BaseHTTPRequestHandler):
             if not error or multierror:
                 error = ("No supported unicast UDP or interleaved transport "
                     "given")
-            raise ErrorResponse(UNSUPPORTED_TRANSPORT, error)
+            raise basehttp.ErrorResponse(UNSUPPORTED_TRANSPORT, error)
         
         dest = self.client_address[0]
         session.addresses[self.stream] = (dest, port)
@@ -417,13 +299,13 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             self.parse_session()
-        except ErrorResponse as err:
+        except basehttp.ErrorResponse as err:
             msg = err.message
             if msg is None:
                 msg = self.responses.get(err.code)[0]
         self.parse_session_path()
         if self.invalidsession:
-            raise ErrorResponse(OK, msg)
+            raise basehttp.ErrorResponse(OK, msg)
         if not self.session:
             self.send_response(SESSION_NOT_FOUND, "No session given")
             self.send_allow()
@@ -437,7 +319,8 @@ class Handler(BaseHTTPRequestHandler):
             if (self.session.ffmpeg and
             self.session.other_addresses(stream)):
                 msg = "Partial TEARDOWN not supported while streaming"
-                raise ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE, msg)
+                raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE,
+                    msg)
             
             msg = None
             if not self.session.addresses[self.stream]:
@@ -471,7 +354,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if (self.stream is not None and
         self.session.other_addresses(self.stream)):
-            raise ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
+            raise basehttp.ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
         if self.session.ffmpeg:
             self.send_response(OK, "Already playing")
             self.send_session()
@@ -494,40 +377,23 @@ class Handler(BaseHTTPRequestHandler):
     
     def parse_path(self):
         """Parse path into media path and possible stream number"""
-        path = self.plainpath
-        if not path:
-            msg = "Method {} does not accept null path".format(self.command)
-            raise ErrorResponse(METHOD_NOT_ALLOWED, msg)
-        
-        try:
-            if path.startswith("/"):
-                path = path[1:]
-            self.media = list()
-            isdir = True  # Remember if the normal path ends with a slash
-            for elem in path.split("/"):
-                isdir = True  # Default unless special value not found
-                if elem == "..":
-                    if self.media:
-                        self.media.pop()
-                elif elem not in {"", "."}:
-                    elem = urllib.parse.unquote(elem,
-                        "ascii", "surrogateescape")
-                    self.media.append(elem)
-                    isdir = False
-            if isdir:
-                self.stream = None
-            else:
-                self.stream = int(self.media.pop())
-        
-        except ValueError as err:
-            raise ErrorResponse(NOT_FOUND, err)
+        basehttp.RequestHandler.parse_path(self)
+        self.media = self.parsedpath[:-1]
+        stream = self.parsedpath[-1]
+        if stream:
+            try:
+                self.stream = int(stream)
+            except ValueError as err:
+                raise basehttp.ErrorResponse(NOT_FOUND, err)
+        else:
+            self.stream = None
     
     def parse_media(self):
         try:
             self.ospath = joinpath(self.media, ".")
             (sdp, self.streams) = self.server._get_sdp(self.ospath)
         except (ValueError, EnvironmentError) as err:
-            raise ErrorResponse(NOT_FOUND, err)
+            raise basehttp.ErrorResponse(NOT_FOUND, err)
         self.validate_stream()
         return sdp
     
@@ -539,7 +405,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.session:
             if self.media != self.session.media:
                 msg = "Session already set up with different media file"
-                raise ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE, msg)
+                raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE,
+                    msg)
             self.streams = len(self.session.addresses)
             self.validate_stream()
         else:
@@ -548,8 +415,8 @@ class Handler(BaseHTTPRequestHandler):
     def validate_stream(self):
         if (self.stream is not None and
         self.stream not in range(self.streams)):
-            msg = "Stream number out of range 0-{}"
-            raise ErrorResponse(NOT_FOUND, msg.format(self.streams - 1))
+            msg = "Stream number out of range 0-{}".format(self.streams - 1)
+            raise basehttp.ErrorResponse(NOT_FOUND, msg)
     
     def parse_session(self):
         self.sessionparsed = True
@@ -562,14 +429,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.sessionkey = int(key, 16)
         except ValueError as err:
-            raise ErrorResponse(SESSION_NOT_FOUND, err)
+            raise basehttp.ErrorResponse(SESSION_NOT_FOUND, err)
         self.session = self.server._sessions.get(self.sessionkey)
         if self.session is None:
-            raise ErrorResponse(SESSION_NOT_FOUND)
+            raise basehttp.ErrorResponse(SESSION_NOT_FOUND)
         self.invalidsession = False
-    
-    def send_public(self):
-        self.send_header("Public", ", ".join(self.handlers.keys()))
     
     def send_allow(self):
         if self.plainpath:
@@ -578,12 +442,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.parse_path()
                 if self.streams is None:
                     self.parse_media()
-            except ErrorResponse:
+            except basehttp.ErrorResponse:
                 return
         if not self.sessionparsed:
             try:
                 self.parse_session()
-            except ErrorResponse:
+            except basehttp.ErrorResponse:
                 pass
         
         mediamatch = (not self.session or not self.plainpath or
@@ -622,6 +486,7 @@ class Handler(BaseHTTPRequestHandler):
         key = format(self.sessionkey, "0{}X".format(_SESSION_DIGITS))
         self.send_header("Session", key)
 
+Handler.responses = dict(Handler.responses)  # Copy from base class
 for (code, message) in (
     (454, "Session Not Found"),
     (455, "Method Not Valid In This State"),
@@ -632,6 +497,14 @@ for (code, message) in (
     symbol = "_".join(message.split()).upper()
     globals()[symbol] = code
     Handler.responses[code] = (message,)
+
+Handler.allow_codes = Handler.allow_codes | {
+    METHOD_NOT_VALID_IN_THIS_STATE,  # Recommended by specification
+    
+    # Other statuses not suggested by specification
+    AGGREGATE_OPERATION_NOT_ALLOWED,
+    ONLY_AGGREGATE_OPERATION_ALLOWED,
+}
 
 class Session:
     def __init__(self, media, ospath, streams):
@@ -649,34 +522,8 @@ class Session:
         return (any(self.addresses[:stream]) or
             any(self.addresses[stream + 1:]))
 
-class ErrorResponse(Exception):
-    def __init__(self, code, message=None):
-        self.code = code
-        self.message = message
-        Exception.__init__(self, self.code)
-
-class EncodeMap(Mapping):
-    surrogates = range(0xDC80, 0xDD00)
-    controls = range(0x20 + 1)
-    def __init__(self, reserved):
-        self.encode = set(map(ord, reserved))
-        self.encode.update(map(ord, "<>"))
-        self.encode.add(0x7F)
-    def __getitem__(self, cp):
-        if cp in self.surrogates:
-            cp -= 0xDC00
-        elif cp not in self.encode and cp not in self.controls:
-            raise KeyError()
-        return "%{:02X}".format(cp)
-    def __len__(self):
-        return len(self.reserved) + len(self.surrogates) + len(self.controls)
-    def __iter__(self):
-        yield from self.encode
-        yield from self.controls
-        yield from self.surrogates
-
 @attributes(param_types=dict(port=int))
-def main(port=RTSP_PORT, *, noffmpeg2=False):
+def main(port=None, *, noffmpeg2=False):
     server = Server(("", port), ffmpeg2=not noffmpeg2)
     try:
         server.serve_forever()
