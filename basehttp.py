@@ -26,6 +26,12 @@ class Server(http.server.HTTPServer):
         if not issubclass(exc, Exception):
             raise  # Force server loop to exit
         super().handle_error(*pos, **kw)
+    
+    def serve_forever(self, *pos, **kw):
+        try:
+            super().serve_forever(*pos, **kw)
+        finally:
+            self.server_close()
 
 class RequestHandler(http.server.BaseHTTPRequestHandler):
     server_version = "Base-HTTP"

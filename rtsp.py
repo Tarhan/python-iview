@@ -525,10 +525,7 @@ class Session:
 @attributes(param_types=dict(port=int))
 def main(port=None, *, noffmpeg2=False):
     server = Server(("", port), ffmpeg2=not noffmpeg2)
-    try:
-        server.serve_forever()
-    finally:
-        server.server_close()
+    server.serve_forever()
 
 if __name__ == "__main__":
     try:
