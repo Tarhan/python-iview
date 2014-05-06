@@ -1,5 +1,3 @@
-from calltrace import traced
-
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 #~ import socketserver
@@ -9,7 +7,7 @@ from http.client import (
 )
 from http.client import NOT_IMPLEMENTED, INTERNAL_SERVER_ERROR
 from http.client import OK
-import email.parser, email.message
+import email.parser
 from functions import setitem
 from io import BytesIO
 import subprocess
