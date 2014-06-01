@@ -107,6 +107,11 @@ class Handler(basehttp.RequestHandler):
     protocol_version = "RTSP/1.0"
     scheme = "rtsp"
     
+    def get_encoding(self, protocol):
+        if protocol in {b"RTSP", None}:
+            return "utf-8"
+        return basehttp.RequestHandler.get_encoding(self, protocol)
+    
     def handle_method(self):
         self.media = None  # Indicates path not parsed
         self.streams = None  # Indicates media not parsed

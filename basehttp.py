@@ -39,33 +39,42 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
     def handle_one_request(self):
         self.close_connection = True
         self.response_started = False
+        self.requestline = "-"
         try:
             self.request_version = None
             self.headers = self.MessageClass()
             try:
-                self.requestline = self.rfile.readline(1000 + 1)
-                if not self.requestline:
+                request = self.rfile.readline(1000 + 1)
+                if not request:
                     return
-                if len(self.requestline) > 1000:
+                if len(request) > 1000:
                     msg = "Request line too long"
                     raise ErrorResponse(REQUEST_URI_TOO_LONG, msg)
                 
-                self.requestline = self.requestline.decode("latin-1")
-                self.requestline = self.requestline.strip()
-                words = self.requestline.split(maxsplit=1)
+                words = request.split(maxsplit=1)
                 if not words:
                     msg = "Missing request method"
                     raise ErrorResponse(BAD_REQUEST, msg)
                 self.command = words[0]
                 if len(words) < 2:
-                    words = ("",)
+                    words = (b"",)
                 else:
                     words = words[1].rsplit(maxsplit=1)
                 self.path = words[0]
                 if len(words) < 2:
-                    self.request_version = None
+                    protocol = None
                 else:
-                    self.request_version = words[1]
+                    version = words[1]
+                    protocol = version.rsplit(b"/", 1)[0]
+                encoding = self.get_encoding(protocol)
+                try:
+                    self.requestline = request.strip().decode(encoding)
+                    self.command = self.command.decode(encoding)
+                    self.path = self.path.decode(encoding)
+                    if protocol is not None:
+                        self.request_version = version.decode(encoding)
+                except ValueError as err:
+                    raise ErrorResponse(BAD_REQUEST, err)
                 
                 self.plainpath = urlparse(self.path).path
                 if self.plainpath == "*":
@@ -98,6 +107,9 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(INTERNAL_SERVER_ERROR, err)
         if self.response_started:
             self.close_connection = True
+    
+    def get_encoding(self, protocol):
+        return "latin-1"
     
     def handle_method(self):
         handler = getattr(self, "do_" + self.command, self.handle_request)
