@@ -37,11 +37,11 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
     server_version = "Base-HTTP"
     
     def handle_one_request(self):
+        self.close_connection = True
+        self.response_started = False
         try:
-            self.close_connection = True
             self.request_version = None
             self.headers = self.MessageClass()
-            self.response_started = False
             try:
                 self.requestline = self.rfile.readline(1000 + 1)
                 if not self.requestline:
@@ -94,10 +94,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(resp.code, resp.message)
         except Exception as err:
             self.server.handle_error(self.request, self.client_address)
-            if self.response_started:
-                self.close_connection = True
-            else:
+            if not self.response_started:
                 self.send_error(INTERNAL_SERVER_ERROR, err)
+        if self.response_started:
+            self.close_connection = True
     
     def handle_method(self):
         handler = self.handlers.get(self.command, type(self).handle_request)
@@ -116,6 +116,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
     def send_response(self, *pos, **kw):
         self.response_started = True
         http.server.BaseHTTPRequestHandler.send_response(self, *pos, **kw)
+    
+    def end_headers(self, *pos, **kw):
+        http.server.BaseHTTPRequestHandler.end_headers(self, *pos, **kw)
+        self.response_started = False
     
     def handle_request(self):
         msg = 'Request method "{}" not implemented'.format(self.command)
