@@ -100,8 +100,8 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             self.close_connection = True
     
     def handle_method(self):
-        handler = self.handlers.get(self.command, type(self).handle_request)
-        handler(self)
+        handler = getattr(self, "do_" + self.command, self.handle_request)
+        handler()
     
     allow_codes = {METHOD_NOT_ALLOWED}  # Required by specification
     
@@ -172,7 +172,11 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         self.parsedpath.extend(emptyfile)
     
     def send_public(self):
-        self.send_header("Public", ", ".join(self.handlers.keys()))
+        methods = list()
+        for method in dir(self):
+            if method.startswith("do_"):
+                methods.append(method[3:])
+        self.send_header("Public", ", ".join(methods))
 
 class ErrorResponse(Exception):
     def __init__(self, code, message=None):

@@ -1,7 +1,6 @@
 #~ import socketserver
 import basehttp
 from http.client import NOT_FOUND, OK
-from functions import setitem
 from io import BytesIO
 import subprocess
 import random
@@ -119,10 +118,7 @@ class Handler(basehttp.RequestHandler):
         for cseq in self.headers.get_all("CSeq", ()):
             self.send_header("CSeq", cseq)
     
-    handlers = dict()
-    
-    @setitem(handlers, "OPTIONS")
-    def handle_options(self):
+    def do_OPTIONS(self):
         """
         OPTIONS bad-path -> 404 + Public
         OPTIONS + Session: bad -> 454 + Allow + Public
@@ -144,8 +140,7 @@ class Handler(basehttp.RequestHandler):
         self.send_public()
         self.end_headers()
     
-    @setitem(handlers, "DESCRIBE")
-    def handle_describe(self):
+    def do_DESCRIBE(self):
         """
         DESCRIBE * -> 405 + [Session +] Allow
         DESCRIBE bad-path -> 404
@@ -158,8 +153,7 @@ class Handler(basehttp.RequestHandler):
             raise basehttp.ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
         self.send_entity("application/sdp", tuple(self.media) + ("",), sdp)
     
-    @setitem(handlers, "SETUP")
-    def handle_setup(self):
+    def do_SETUP(self):
         """
         SETUP + Session: bad -> 454
         SETUP new-path + Session -> 455 + Session + Allow
@@ -285,8 +279,7 @@ class Handler(basehttp.RequestHandler):
         self.send_header("Transport", transport)
         self.end_headers()
     
-    @setitem(handlers, "TEARDOWN")
-    def handle_teardown(self):
+    def do_TEARDOWN(self):
         """
         TEARDOWN new-path + Session -> 455 + Session + Allow
         TEARDOWN bad-path -> 404
@@ -334,8 +327,7 @@ class Handler(basehttp.RequestHandler):
             self.send_session()
         self.end_headers()
     
-    @setitem(handlers, "PLAY")
-    def handle_play(self):
+    def do_PLAY(self):
         """
         PLAY + Session: bad -> 454
         PLAY new-path -> 455 + Session + Allow
@@ -371,8 +363,7 @@ class Handler(basehttp.RequestHandler):
         self.send_session()
         self.end_headers()
     
-    #~ @setitem(handlers, "PAUSE")
-    #~ def handle_pause(self):
+    #~ def do_PAUSE(self):
         #~ return self.handle_request()
     
     def parse_path(self):
