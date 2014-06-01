@@ -2,7 +2,7 @@ import http.server
 from urllib.parse import urlparse
 from http.client import (
     REQUEST_URI_TOO_LONG, REQUEST_HEADER_FIELDS_TOO_LARGE,
-    METHOD_NOT_ALLOWED,
+    METHOD_NOT_ALLOWED, BAD_REQUEST,
 )
 from http.client import NOT_IMPLEMENTED, INTERNAL_SERVER_ERROR
 from http.client import OK
@@ -52,13 +52,20 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 
                 self.requestline = self.requestline.decode("latin-1")
                 self.requestline = self.requestline.strip()
-                (self.command, rest) = self.requestline.split(maxsplit=1)
-                rest = rest.rsplit(maxsplit=1)
-                if len(rest) >= 2:
-                    (self.path, self.request_version) = rest
+                words = self.requestline.split(maxsplit=1)
+                if not words:
+                    msg = "Missing request method"
+                    raise ErrorResponse(BAD_REQUEST, msg)
+                self.command = words[0]
+                if len(words) < 2:
+                    words = ("",)
                 else:
-                    (self.path,) = rest
+                    words = words[1].rsplit(maxsplit=1)
+                self.path = words[0]
+                if len(words) < 2:
                     self.request_version = None
+                else:
+                    self.request_version = words[1]
                 
                 self.plainpath = urlparse(self.path).path
                 if self.plainpath == "*":
