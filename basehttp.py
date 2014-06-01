@@ -2,7 +2,7 @@ import http.server
 from urllib.parse import urlparse
 from http.client import (
     REQUEST_URI_TOO_LONG, REQUEST_HEADER_FIELDS_TOO_LARGE,
-    METHOD_NOT_ALLOWED, BAD_REQUEST,
+    METHOD_NOT_ALLOWED, BAD_REQUEST, FORBIDDEN,
 )
 from http.client import NOT_IMPLEMENTED, INTERNAL_SERVER_ERROR
 from http.client import OK
@@ -126,6 +126,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(NOT_IMPLEMENTED, msg)
         self.send_public()
         self.end_headers()
+    
+    def do_HEAD(self):
+        raise ErrorResponse(FORBIDDEN)
+    do_GET = do_HEAD
     
     def send_entity(self, type, location, data):
         self.send_response(OK)
