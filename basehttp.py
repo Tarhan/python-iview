@@ -107,6 +107,8 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
     
     def send_error(self, code, message=None):
         self.send_response(code, message)
+        if self.close_connection:
+            self.send_header("Connection", "close")
         if code in self.allow_codes:
             self.send_allow()
         self.end_headers()
