@@ -368,8 +368,32 @@ class Handler(basehttp.RequestHandler):
         self.send_session()
         self.end_headers()
     
-    #~ def do_PAUSE(self):
-        #~ return self.handle_request()
+    def do_PAUSE(self):
+        self.parse_session()
+        self.parse_session_path()
+        if not self.session:
+            self.send_response(SESSION_NOT_FOUND, "No session given")
+            self.send_allow()
+            self.end_headers()
+            return
+        if (self.stream is not None and
+        self.session.other_addresses(self.stream)):
+            raise basehttp.ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
+        
+        if "Range" in self.headers:
+            msg = "Deferred pausing not supported"
+            raise basehttp.ErrorResponse(HEADER_FIELD_NOT_VALID_FOR_RESOURCE,
+                msg)
+        
+        if self.session.ffmpeg:
+            self.session.end()
+            self.session.ffmpeg = None
+            msg = None
+        else:
+            msg = "Already paused"
+        self.send_response(OK, msg)
+        self.send_session()
+        self.end_headers()
     
     def parse_path(self):
         """Parse path into media path and possible stream number"""
@@ -472,7 +496,7 @@ class Handler(basehttp.RequestHandler):
         self.session and mediamatch and (allstreams or not streaming)):
             allow.append("TEARDOWN")
         if mediamatch and allstreams:
-            allow.append("PLAY")
+            allow.extend(("PLAY", "PAUSE"))
         
         if self.session:
             self.send_session()
@@ -486,6 +510,7 @@ Handler.responses = dict(Handler.responses)  # Copy from base class
 for (code, message) in (
     (454, "Session Not Found"),
     (455, "Method Not Valid In This State"),
+    (456, "Header Field Not Valid for Resource"),
     (459, "Aggregate Operation Not Allowed"),
     (460, "Only Aggregate Operation Allowed"),
     (461, "Unsupported Transport"),
