@@ -503,7 +503,8 @@ class Handler(basehttp.RequestHandler):
         self.send_header("Allow", ", ".join(allow))
     
     def send_session(self):
-        key = format(self.sessionkey, "0{}X".format(_SESSION_DIGITS))
+        key = "{:0{}X};timeout=86400"
+        key = key.format(self.sessionkey, _SESSION_DIGITS)
         self.send_header("Session", key)
 
 Handler.responses = dict(Handler.responses)  # Copy from base class
