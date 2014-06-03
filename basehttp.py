@@ -53,8 +53,9 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 
                 words = request.split(maxsplit=1)
                 if not words:
-                    msg = "Missing request method"
-                    raise ErrorResponse(BAD_REQUEST, msg)
+                    self.close_connection = False
+                    return
+                
                 self.command = words[0]
                 if len(words) < 2:
                     words = (b"",)
