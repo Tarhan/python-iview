@@ -191,77 +191,47 @@ class Handler(basehttp.RequestHandler):
             raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE, msg)
         
         error = None
-        for transports in self.headers.get_all("Transport", ()):
-            if '"' in transports:
-                multierror = error
-                error = "Parsing quotes not implemented"
-                continue
-            
-            for transport in transports.split(","):
-                try:
-                    transport = transport.strip()
-                    
-                    params = transport.split(";")
-                    spec = params[0].strip().upper().split("/", 2)
-                    if spec[:2] != ["RTP", "AVP"]:
-                        raise ValueError("Only RTP/AVP supported")
-                    udp = len(spec) <= 2 or spec[2] == "UDP"
-                    
-                    unicast = False
-                    port = None
-                    interleaved = None
-                    ilstart = None
-                    for param in params[1:]:
-                        (name, _, value) = param.partition("=")
-                        name = name.strip()
-                        value = value.strip()
-                        lname = name.lower()
-                        
-                        unicast = unicast or lname == "unicast" and not value
-                        if (lname == "mode" and value and
-                        frozenset((value.upper(),)) != {"PLAY"}):  # TODO: parse comma-separated list
-                            raise ValueError("Only mode=PLAY supported")
-                        
-                        if lname == "interleaved":
-                            interleaved = True
-                            if ilstart is not None:
-                                msg = 'Multiple "interleaved" parameters'
-                                raise ValueError(msg)
-                            (ilstart, _, end) = value.partition("-")
-                            ilstart = int(ilstart)
-                            if end and int(end) != ilstart + 1:
-                                msg = "Only pair of channels supported"
-                                raise ValueError(msg)
-                        
-                        if lname == "client_port" and value:
-                            if port is not None:
-                                msg = 'Multiple "client_port" parameters'
-                                raise ValueError(msg)
-                            (port, _, end) = value.partition("-")
-                            port = int(port)
-                            if end and int(end) != port + 1:
-                                msg = "Only pair of ports supported"
-                                raise ValueError(msg)
-                    
-                    if interleaved:
-                        if ilstart is None:
-                            raise ValueError("Interleaved channel not given")
-                        msg = "Interleaved transport not yet implemented"
-                        raise ValueError(msg)
-                    if udp and unicast:
-                        if port is None:
-                            raise ValueError("Unicast UDP port not given")
-                        break
-                    msg = ("Only unicast UDP and interleaved transports "
-                        "supported")
-                    raise ValueError(msg)
+        for transport in net.header_list(self.headers, "Transport"):
+            try:
+                [transport, params] = net.header_partition(transport, ";")
+                transport = iter(net.header_split(transport, "/"))
+                if (next(transport, "RTP").upper() != "RTP" or
+                next(transport, "AVP").upper() != "AVP"):
+                    raise ValueError("Only RTP/AVP supported")
                 
-                except ValueError as exc:
-                    multierror = error
-                    error = format(exc)
-            else:  # No suitable transport found
-                continue
-            break  # Stopped on suitable transport
+                params = net.HeaderParams(params)
+                for mode in params["mode"]:
+                    mode = net.header_split(net.header_unquote(mode), ",")
+                    if frozenset(map(str.upper, mode)) != {"PLAY"}:
+                        raise ValueError("Only mode=PLAY supported")
+                
+                try:
+                    channel = params.get_single("interleaved")
+                    [channel, end] = net.header_partition(channel, "-")
+                    channel = int(net.header_unquote(channel))
+                    if end and int(net.header_unquote(end)) != channel + 1:
+                        raise ValueError("Only pair of channels supported")
+                    
+                    msg = "Interleaved transport not yet implemented"
+                    raise ValueError(msg)
+                except KeyError:
+                    pass
+                
+                udp = next(transport, "UDP").upper() == "UDP"
+                if udp and "unicast" in params:
+                    port = params.get_single("client_port")
+                    [port, end] = net.header_partition(port, "-")
+                    port = int(net.header_unquote(port))
+                    if end and int(net.header_unquote(end)) != port + 1:
+                        raise ValueError("Only pair of ports supported")
+                    break
+                
+                msg = ("Only unicast UDP and interleaved transports "
+                    "supported")
+                raise ValueError(msg)
+            except (ValueError, KeyError) as exc:
+                multierror = error
+                error = format(exc)
         else:  # No suitable transport found
             if not error or multierror:
                 error = ("No supported unicast UDP or interleaved transport "
