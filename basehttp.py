@@ -26,9 +26,8 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
         self.response_started = False
         self.requestline = "-"
+        self.request_version = None
         try:
-            self.request_version = None
-            self.headers = self.MessageClass()
             try:
                 request = self.rfile.readline(1000 + 1)
                 if not request:
