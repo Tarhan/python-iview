@@ -9,29 +9,15 @@ from http.client import OK
 import email.parser
 import urllib.parse
 from collections.abc import Mapping
-from misc import formataddr, urlbuild
+import net
 
-class Server(http.server.HTTPServer):
+class Server(net.Server, http.server.HTTPServer):
     def __init__(self, address=("", None), RequestHandlerClass=None):
         super().__init__(address, RequestHandlerClass)
         (host, port) = address
         if port is not None:
             port = self.server_port
-        self.server_address = formataddr((self.server_name, port))
-    
-    def handle_error(self, *pos, **kw):
-        exc = sys.exc_info()[0]
-        if issubclass(exc, ConnectionError):
-            return
-        if not issubclass(exc, Exception):
-            raise  # Force server loop to exit
-        super().handle_error(*pos, **kw)
-    
-    def serve_forever(self, *pos, **kw):
-        try:
-            super().serve_forever(*pos, **kw)
-        finally:
-            self.server_close()
+        self.server_address = net.formataddr((self.server_name, port))
 
 class RequestHandler(http.server.BaseHTTPRequestHandler):
     server_version = "Base-HTTP"
@@ -157,7 +143,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 elem = "%2E" + elem[1:]
             url.append(elem)
         url = "/" + "/".join(url)
-        url = urlbuild(self.scheme, self.server.server_address, url)
+        url = net.Url(self.scheme, self.server.server_address, url).geturl()
         
         # Send Content-Base
         # because many clients (FF MPEG) ignore Content-Location

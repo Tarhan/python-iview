@@ -5,7 +5,7 @@ from io import BytesIO
 import subprocess
 import random
 from functions import attributes
-from misc import formataddr, urlbuild
+import net
 from misc import joinpath
 
 _SESSION_DIGITS = 25
@@ -94,7 +94,7 @@ class Server(basehttp.Server):
                 # although only after outputting the SDP data,
                 # and "libav" does not emit the error.
                 address = ("localhost", 6970 + i * 2)
-            cmd.append(urlbuild("rtp", formataddr(address)))
+            cmd.append(net.Url("rtp", net.formataddr(address)).geturl())
             
             if not self._ffmpeg2 and i:
                 cmd += ("-new" + type,)
