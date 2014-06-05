@@ -328,6 +328,26 @@ class Handler(basehttp.RequestHandler):
             self.end_headers()
             return
         
+        try:
+            ranges = iter(net.header_list(self.headers, "Range"))
+            range = next(ranges, None)
+            if range:
+                if next(ranges, None):
+                    raise ValueError("Only single play range supported")
+                range = net.HeaderParams(range)
+                if "time" in range:
+                    raise ValueError("Start time parameter not supported")
+                npt = range.get_single("npt")
+                [npt, end] = net.header_partition(npt, "-")
+        except KeyError:  # Missing "npt" parameter
+            self.send_response(NOT_IMPLEMENTED, "Only NPT range supported")
+            self.send_header("Accept-Ranges", "npt")
+            self.end_headers()
+            return
+        except ValueError as err:
+            raise basehttp.ErrorResponse(
+                HEADER_FIELD_NOT_VALID_FOR_RESOURCE, err)
+        
         options = ("-re",)
         addresses = self.session.addresses
         streams = ((type, address) for (type, address) in
