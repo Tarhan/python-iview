@@ -6,6 +6,7 @@ import random
 from functions import attributes
 import net
 from misc import joinpath
+import time
 import selectors
 import sys
 from utils import SelectableServer
@@ -401,6 +402,7 @@ class Handler(basehttp.RequestHandler):
                 msg)
         
         if self.session.ffmpeg:
+            self.session.pause_point += time.monotonic() - self.session.started
             msg = "FF MPEG exit status {}".format(self.session.end())
             self.session.ffmpeg = None
         else:
@@ -553,6 +555,7 @@ class Session:
         self.ospath = ospath
         self.transports = [None] * streams
         self.ffmpeg = None
+        self.pause_point = 0
     
     def start(self, selector, ffmpeg2=True):
         options = ("-re",)
@@ -565,6 +568,7 @@ class Session:
         self.selector = selector
         self.selector.register(self.ffmpeg.stdout, selectors.EVENT_READ,
             self)
+        self.started = time.monotonic()
     
     def end(self):
         if self.ffmpeg:
