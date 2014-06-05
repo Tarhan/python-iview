@@ -432,12 +432,16 @@ class Handler(basehttp.RequestHandler):
         self.sessionparsed = True
         self.invalidsession = True
         self.session = None  # Indicate no session by default
-        key = self.headers.get("Session")
-        if key is None:
+        sessions = iter(net.header_list(self.headers, "Session"))
+        key = next(sessions, None)
+        if not key:
             self.invalidsession = False
             return
         try:
-            self.sessionkey = int(key, 16)
+            if next(sessions, None):
+                raise ValueError("More than one session given")
+            [key, _] = net.header_partition(key, ";")
+            self.sessionkey = int(net.header_unquote(key), 16)
         except ValueError as err:
             raise basehttp.ErrorResponse(SESSION_NOT_FOUND, err)
         self.session = self.server._sessions.get(self.sessionkey)
