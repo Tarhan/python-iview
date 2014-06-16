@@ -29,10 +29,11 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         self.request_version = None
         try:
             try:
-                request = self.rfile.readline(1000 + 1)
+                # RFC 7230 recommends a minimum limit of 8000 octets
+                request = self.rfile.readline(8000 + 1)
                 if not request:
                     return
-                if len(request) > 1000:
+                if len(request) > 8000:
                     msg = "Request line too long"
                     raise ErrorResponse(REQUEST_URI_TOO_LONG, msg)
                 
@@ -45,7 +46,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 if len(words) < 2:
                     words = (b"",)
                 else:
-                    words = words[1].rsplit(maxsplit=1)
+                    words = words[1].rsplit(maxsplit=1) # TODO: 301 if space, to help downstream proxies
                 self.path = words[0]
                 if len(words) < 2:
                     protocol = None
