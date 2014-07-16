@@ -44,11 +44,9 @@ class Server(basehttp.Server):
                     break
                 
                 if line.startswith(b"m="):
-                    fields = line.split(maxsplit=3)
+                    fields = line.split(maxsplit=2)
                     PORT = 1
-                    PROTO = 2
                     fields[PORT] = b"0"  # VLC hangs or times out otherwise
-                    fields[PROTO] = b"TCP/RTP/AVP"
                     line = b" ".join(fields)
                     streams += 1
                 if not line.startswith(b"a=control:"):
