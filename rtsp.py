@@ -36,6 +36,7 @@ class Server(basehttp.Server):
         options = ("-t", "0")  # Stop before processing any video
         streams = ((type, None) for type in self._streamtypes)
         ffmpeg = self._ffmpeg(file, options, streams,
+            loglevel="error",  # Avoid empty output warning caused by "-t 0"
             stdout=subprocess.PIPE, bufsize=-1,
         )
         with ffmpeg:
@@ -83,7 +84,7 @@ class Server(basehttp.Server):
     
     _streamtypes = ("video", "audio")
     
-    def _ffmpeg(self, file, options, streams, **popenargs):
+    def _ffmpeg(self, file, options, streams, **kw):
         """Spawn an FF MPEG child process
         
         * options: CLI arguments to include
@@ -111,10 +112,11 @@ class Server(basehttp.Server):
                 options += ("-new" + type,)
             first = False
         
-        return self._ffmpeg_command("ffmpeg", options, **popenargs)
+        return self._ffmpeg_command("ffmpeg", options, **kw)
     
-    def _ffmpeg_command(self, command, options, **popenargs):
-        command = [command, "-loglevel", "warning"]
+    def _ffmpeg_command(self, command, options,
+    loglevel="warning", **popenargs):
+        command = [command, "-loglevel", loglevel]
         command.extend(options)
         return subprocess.Popen(command, **popenargs)
 
