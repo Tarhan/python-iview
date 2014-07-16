@@ -21,6 +21,18 @@ class Server(basehttp.Server):
         super().__init__(address, Handler)
     
     def _get_sdp(self, file):
+        options = (
+            "-show_entries", "format=duration",
+            "-print_format", "compact=print_section=0:nokey=1:escape=none",
+            file,
+        )
+        with self._ffmpeg_command("ffprobe", options,
+        stdout=subprocess.PIPE, bufsize=-1) as ffprobe:
+            duration = ffprobe.stdout.read().strip()
+        if ffprobe.returncode:
+            msg = "ffprobe returned exit status {}"
+            raise EnvironmentError(msg.format(ffprobe.returncode))
+        
         options = ("-t", "0")  # Stop before processing any video
         streams = ((type, None) for type in self._streamtypes)
         ffmpeg = self._ffmpeg(file, options, streams,
@@ -37,9 +49,12 @@ class Server(basehttp.Server):
             streams = 0
             while line:
                 end = not line.strip()
-                if (end or line.startswith(b"m=")) and streams:
-                    control = "a=control:{}\r\n".format(streams - 1)
-                    sdp.write(control.encode("ascii"))
+                if end or line.startswith(b"m="):
+                    if streams:  # End of a media section
+                        control = "a=control:{}\r\n".format(streams - 1)
+                        sdp.write(control.encode("ascii"))
+                    else:  # End of the top session-level section
+                        sdp.write(b"a=range:npt=0-" + duration + b"\r\n")
                 if end:
                     break
                 
@@ -74,31 +89,34 @@ class Server(basehttp.Server):
         * options: CLI arguments to include
         * streams: Output an RTP stream for each of these
         """
-        cmd = ["ffmpeg", "-loglevel", "warning"]
-        cmd.extend(options)
-        cmd.extend(("-i", file))
+        options = list(options) + ["-i", file]
         
         for (i, (type, address)) in enumerate(streams):
             t = type[0]
             if self._ffmpeg2:
-                cmd.extend(("-map", "0:" + t))
-            cmd.extend(("-{}codec".format(t), "copy"))
-            cmd.extend("-{}n".format(other[0]) for
+                options.extend(("-map", "0:" + t))
+            options.extend(("-{}codec".format(t), "copy"))
+            options.extend("-{}n".format(other[0]) for
                 other in self._streamtypes if other != type)
             
-            cmd.extend(("-f", "rtp"))
+            options.extend(("-f", "rtp"))
             if not address:
                 # Avoid null or zero port because FF MPEG emits an error,
                 # although only after outputting the SDP data,
                 # and "libav" does not emit the error.
                 address = ("localhost", 6970 + i * 2)
-            cmd.append(net.Url("rtp", net.formataddr(address)).geturl())
+            options.append(net.Url("rtp", net.formataddr(address)).geturl())
             
             if not self._ffmpeg2 and i:
-                cmd += ("-new" + type,)
+                options += ("-new" + type,)
             first = False
         
-        return subprocess.Popen(cmd, **popenargs)
+        return self._ffmpeg_command("ffmpeg", options, **popenargs)
+    
+    def _ffmpeg_command(self, command, options, **popenargs):
+        command = [command, "-loglevel", "warning"]
+        command.extend(options)
+        return subprocess.Popen(command, **popenargs)
 
 class Handler(basehttp.RequestHandler):
     server_version = "RTSP-server " + basehttp.RequestHandler.server_version
@@ -400,7 +418,8 @@ class Handler(basehttp.RequestHandler):
         try:
             self.ospath = joinpath(self.media, ".")
             (sdp, self.streams) = self.server._get_sdp(self.ospath)
-        except (ValueError, EnvironmentError) as err:
+        except (ValueError, EnvironmentError,
+        subprocess.CalledProcessError) as err:
             raise basehttp.ErrorResponse(NOT_FOUND, err)
         self.validate_stream()
         return sdp
