@@ -8,6 +8,10 @@ import net
 from misc import joinpath
 from selectors import DefaultSelector
 import sys
+from utils import SelectableServer
+from utils import RewindableReader
+from socketserver import UDPServer, BaseRequestHandler
+from struct import Struct
 
 _SESSION_DIGITS = 25
 
@@ -125,6 +129,19 @@ class Handler(basehttp.RequestHandler):
     protocol_version = "RTSP/1.0"
     scheme = "rtsp"
     
+    def setup(self):
+        basehttp.RequestHandler.setup(self)
+        self.rfile = RewindableReader(self.rfile)
+    
+    def handle_one_request(self):
+        self.rfile.capture()
+        c = self.rfile.read(1)
+        if c == b"$":
+            self.rfile.commit()
+            raise NotImplementedError("Interleaved packet")
+        self.rfile.rewind()
+        return basehttp.RequestHandler.handle_one_request(self)
+    
     def get_encoding(self, protocol):
         if protocol in {b"RTSP", None}:
             return "utf-8"
@@ -225,23 +242,19 @@ class Handler(basehttp.RequestHandler):
                 
                 try:
                     channel = params.get_single("interleaved")
-                    [channel, end] = net.header_partition(channel, "-")
+                    [channel, _] = net.header_partition(channel, "-")
                     channel = int(net.header_unquote(channel))
-                    if end and int(net.header_unquote(end)) != channel + 1:
-                        raise ValueError("Only pair of channels supported")
-                    
-                    msg = "Interleaved transport not yet implemented"
-                    raise ValueError(msg)
+                    transport = InterleavedTransport(self, channel)
+                    break
                 except KeyError:
                     pass
                 
                 udp = next(transport, "UDP").upper() == "UDP"
                 if udp and "unicast" in params:
                     port = params.get_single("client_port")
-                    [port, end] = net.header_partition(port, "-")
+                    [port, _] = net.header_partition(port, "-")
                     port = int(net.header_unquote(port))
-                    if end and int(net.header_unquote(end)) != port + 1:
-                        raise ValueError("Only pair of ports supported")
+                    transport = UdpTransport(self.client_address[0], port)
                     break
                 
                 msg = ("Only unicast UDP and interleaved transports "
@@ -256,8 +269,7 @@ class Handler(basehttp.RequestHandler):
                     "given")
             raise basehttp.ErrorResponse(UNSUPPORTED_TRANSPORT, error)
         
-        dest = self.client_address[0]
-        session.addresses[self.stream] = (dest, port)
+        session.transports[self.stream] = transport
         if self.session is None:
             self.sessionkey = random.getrandbits(_SESSION_DIGITS * 4)
             self.server._sessions[self.sessionkey] = session
@@ -267,9 +279,7 @@ class Handler(basehttp.RequestHandler):
         
         self.send_response(OK, msg)
         self.send_session()
-        transport = "RTP/AVP/UDP;unicast;destination={};client_port={}-{}"
-        transport = transport.format(dest, port, port + 2 - 1)
-        self.send_header("Transport", transport)
+        self.send_header("Transport", transport.header())
         self.end_headers()
     
     def do_TEARDOWN(self):
@@ -303,16 +313,16 @@ class Handler(basehttp.RequestHandler):
             msg = "Session invalidated"
         else:
             if (self.session.ffmpeg and
-            self.session.other_addresses(stream)):
+            self.session.other_transports(stream)):
                 msg = "Partial TEARDOWN not supported while streaming"
                 raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE,
                     msg)
             
             msg = None
-            if not self.session.addresses[self.stream]:
+            if not self.session.transports[self.stream]:
                 msg = "Stream {} not set up".format(self.stream)
-            self.session.addresses[self.stream] = None
-            if not any(self.session.addresses):
+            self.session.transports[self.stream] = None
+            if not any(self.session.transports):
                 self.server._sessions.pop(self.sessionkey).end()
                 msg = "Session invalidated"
         self.send_response(OK, msg)
@@ -338,7 +348,7 @@ class Handler(basehttp.RequestHandler):
             self.end_headers()
             return
         if (self.stream is not None and
-        self.session.other_addresses(self.stream)):
+        self.session.other_transports(self.stream)):
             raise basehttp.ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
         if self.session.ffmpeg:
             self.send_response(OK, "Already playing")
@@ -367,9 +377,11 @@ class Handler(basehttp.RequestHandler):
                 HEADER_FIELD_NOT_VALID_FOR_RESOURCE, err)
         
         options = ("-re",)
-        addresses = self.session.addresses
-        streams = ((type, address) for (type, address) in
-            zip(self.server._streamtypes, addresses) if address)
+        transports = zip(self.server._streamtypes, self.session.transports)
+        streams = list()
+        for [type, transport] in transports:
+            if transport:
+                streams.append((type, transport.setup()))
         self.session.ffmpeg = self.server._ffmpeg(
             self.session.ospath, options, streams, stdout=subprocess.DEVNULL)
         self.send_response(OK)
@@ -385,7 +397,7 @@ class Handler(basehttp.RequestHandler):
             self.end_headers()
             return
         if (self.stream is not None and
-        self.session.other_addresses(self.stream)):
+        self.session.other_transports(self.stream)):
             raise basehttp.ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
         
         if "Range" in self.headers:
@@ -436,7 +448,7 @@ class Handler(basehttp.RequestHandler):
                 msg = "Session already set up with different media file"
                 raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE,
                     msg)
-            self.streams = len(self.session.addresses)
+            self.streams = len(self.session.transports)
             self.validate_stream()
         else:
             self.parse_media()
@@ -488,8 +500,8 @@ class Handler(basehttp.RequestHandler):
         streaming = self.session and self.session.ffmpeg
         allstreams = self.session and (
             not self.plainpath or self.stream is None or
-            self.session.addresses[self.stream] and
-            not self.session.other_addresses(self.stream)
+            self.session.transports[self.stream] and
+            not self.session.other_transports(self.stream)
         )
         
         allow = ["OPTIONS"]
@@ -500,7 +512,7 @@ class Handler(basehttp.RequestHandler):
             
             singlestream = self.stream is not None or self.streams <= 1
         else:
-            singlestream = self.session and len(self.session.addresses) <= 1
+            singlestream = self.session and len(self.session.transports) <= 1
         if (mediamatch and singlestream and not self.invalidsession and
         not streaming):
             allow.append("SETUP")
@@ -545,17 +557,69 @@ class Session:
     def __init__(self, media, ospath, streams):
         self.media = media
         self.ospath = ospath
-        self.addresses = [None] * streams
+        self.transports = [None] * streams
         self.ffmpeg = None
     
     def end(self):
         if self.ffmpeg:
+            for transport in self.transports:
+                if transport:
+                    transport.close()
             self.ffmpeg.terminate()
             self.ffmpeg.wait()
     
-    def other_addresses(self, stream):
-        return (any(self.addresses[:stream]) or
-            any(self.addresses[stream + 1:]))
+    def other_transports(self, stream):
+        return (any(self.transports[:stream]) or
+            any(self.transports[stream + 1:]))
+
+class Transport:
+    def close(self):
+        pass
+
+class UdpTransport(Transport):
+    def __init__(self, dest, port):
+        self.dest = dest
+        self.port = port
+    
+    def header(self):
+        header = "RTP/AVP/UDP;unicast;destination={};client_port={}"
+        return header.format(self.dest, self.port)
+    
+    def setup(self):
+        return (self.dest, self.port)
+
+class InterleavedTransport(Transport):
+    def __init__(self, handler, channel):
+        self.handler = handler
+        self.channel = channel
+    
+    def header(self):
+        header = "RTP/AVP/TCP;interleaved={}"
+        return header.format(self.channel)
+    
+    def setup(self):
+        self.listener = RtpListener(self.handler.wfile, self.channel)
+        self.listener.register(self.handler.server.selector)
+        return self.listener.server_address
+    
+    def close(self):
+        self.listener.close()
+
+class RtpListener(SelectableServer, UDPServer):
+    def __init__(self, file, channel):
+        self.file = file
+        self.channel = channel
+        SelectableServer.__init__(self,
+            RequestHandlerClass=InterleavedHandler)
+
+class InterleavedHandler(BaseRequestHandler):
+    header = Struct("!cBH")
+    def handle(self):
+        [packet, _] = self.request
+        header = self.header.pack(b"$", self.server.channel, len(packet))
+        self.server.file.write(header)
+        self.server.file.write(packet)
+        self.server.file.flush()
 
 @attributes(param_types=dict(port=int))
 def main(port=None, *, noffmpeg2=False):

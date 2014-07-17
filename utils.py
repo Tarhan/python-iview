@@ -1,6 +1,33 @@
+from io import BytesIO, BufferedIOBase
 import net
 import selectors
 from socketserver import StreamRequestHandler
+
+class RewindableReader(BufferedIOBase):
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+        self.readbuffer = BytesIO()
+    
+    def fileno(self, *pos, **kw):
+        return self.wrapped.fileno(*pos, **kw)
+    
+    def capture(self):
+        self.writebuffer = BytesIO()
+    def commit(self):
+        self.writebuffer = None
+    def rewind(self):
+        self.readbuffer = self.writebuffer
+        self.readbuffer.seek(0)
+        self.writebuffer = None
+    
+    def read(self, size=None):
+        data = self.readbuffer.read(size)
+        if size is not None and size >= 0:
+            size -= len(data)
+        data += self.wrapped.read(size)
+        if self.writebuffer:
+            self.writebuffer.write(data)
+        return data
 
 class SelectableServer(net.Server):
     def __init__(self, *pos, **kw):
@@ -30,7 +57,7 @@ class SelectableServer(net.Server):
             self.selector.unregister(self.fileno())
         return super().close()
 
-class SelectableHandler(BaseRequestHandler):
+class SelectableHandler(StreamRequestHandler):
     def handle(self):
         if not self.server.selected:
             return super().handle()
