@@ -1,4 +1,3 @@
-#~ import socketserver
 import basehttp
 from http.client import NOT_FOUND, OK
 from io import BytesIO
@@ -7,10 +6,11 @@ import random
 from functions import attributes
 import net
 from misc import joinpath
+from selectors import DefaultSelector
+import sys
 
 _SESSION_DIGITS = 25
 
-#~ class Server(socketserver.ThreadingMixIn, basehttp.Server):
 class Server(basehttp.Server):
     default_port = 554
     
@@ -559,9 +559,17 @@ class Session:
 
 @attributes(param_types=dict(port=int))
 def main(port=None, *, noffmpeg2=False):
-    server = Server(("", port), ffmpeg2=not noffmpeg2)
-    print(server.server_address)
-    server.serve_forever()
+    with DefaultSelector() as selector, \
+    Server(("", port), ffmpeg2=not noffmpeg2) as server:
+        print(server.server_address)
+        server.register(selector)
+        while True:
+            ready = selector.select()
+            for [ready, _] in ready:
+                try:
+                    ready.data.handle_select()
+                except Exception:
+                    sys.excepthook(*sys.exc_info())
 
 if __name__ == "__main__":
     try:
