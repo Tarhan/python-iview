@@ -10,8 +10,9 @@ import email.parser
 import urllib.parse
 from collections.abc import Mapping
 import net
+from utils import SelectableServer, SelectableHandler
 
-class Server(net.Server, http.server.HTTPServer):
+class Server(SelectableServer, http.server.HTTPServer):
     def __init__(self, address=("", None), RequestHandlerClass=None):
         super().__init__(address, RequestHandlerClass)
         (host, port) = address
@@ -19,7 +20,7 @@ class Server(net.Server, http.server.HTTPServer):
             port = self.server_port
         self.server_address = net.formataddr((self.server_name, port))
 
-class RequestHandler(http.server.BaseHTTPRequestHandler):
+class RequestHandler(SelectableHandler, http.server.BaseHTTPRequestHandler):
     server_version = "Base-HTTP"
     
     def handle_one_request(self):
