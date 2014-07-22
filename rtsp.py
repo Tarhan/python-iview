@@ -122,7 +122,8 @@ class Server(basehttp.Server):
     loglevel="warning", **popenargs):
         command = [command, "-loglevel", loglevel]
         command.extend(options)
-        return subprocess.Popen(command, **popenargs)
+        return subprocess.Popen(command, stdin=subprocess.DEVNULL,
+            **popenargs)
 
 class Handler(basehttp.RequestHandler):
     server_version = "RTSP-server " + basehttp.RequestHandler.server_version
