@@ -633,6 +633,8 @@ def main(port=None, *, noffmpeg2=False):
             for [ready, _] in ready:
                 try:
                     ready.data.handle_select()
+                except ConnectionError:
+                    pass
                 except Exception:
                     sys.excepthook(*sys.exc_info())
 
