@@ -321,8 +321,8 @@ class Handler(basehttp.RequestHandler):
             return
         
         if self.stream is None:
-            self.server._sessions.pop(self.sessionkey).end()
-            msg = "Session invalidated"
+            session = self.server._sessions.pop(self.sessionkey)
+            msg = "FF MPEG exit status {}".format(session.end())
         else:
             if (self.session.ffmpeg and
             self.session.other_transports(stream)):
@@ -335,8 +335,8 @@ class Handler(basehttp.RequestHandler):
                 msg = "Stream {} not set up".format(self.stream)
             self.session.transports[self.stream] = None
             if not any(self.session.transports):
-                self.server._sessions.pop(self.sessionkey).end()
-                msg = "Session invalidated"
+                session = self.server._sessions.pop(self.sessionkey)
+                msg = "FF MPEG exit status {}".format(session.end())
         self.send_response(OK, msg)
         if self.sessionkey in self.server._sessions:
             self.send_session()
@@ -412,9 +412,8 @@ class Handler(basehttp.RequestHandler):
                 msg)
         
         if self.session.ffmpeg:
-            self.session.end()
+            msg = "FF MPEG exit status {}".format(self.session.end())
             self.session.ffmpeg = None
-            msg = None
         else:
             msg = "Already paused"
         self.send_response(OK, msg)
@@ -582,7 +581,7 @@ class Session:
         if self.ffmpeg:
             self.close_transports()
             self.ffmpeg.terminate()
-            self.ffmpeg.wait()
+            return self.ffmpeg.wait()
     
     def handle_select(self):
         if not self.ffmpeg.stdout.read(0x10000):
