@@ -105,7 +105,7 @@ def _ffmpeg(file, options, streams, bufsize=0, ffmpeg2=True, **kw):
         options.extend("-{}n".format(other[0]) for
             other in _streamtypes if other != type)
         
-        options.extend(("-f", "rtp"))
+        options.extend(("-f", "rtp", "-rtpflags", "send_bye"))
         query = list()
         if not addresses:
             # Avoid null or zero port because FF MPEG emits an error,
