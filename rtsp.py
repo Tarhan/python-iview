@@ -377,15 +377,7 @@ class Handler(basehttp.RequestHandler):
             raise basehttp.ErrorResponse(
                 HEADER_FIELD_NOT_VALID_FOR_RESOURCE, err)
         
-        options = ("-re",)
-        transports = zip(self.server._streamtypes, self.session.transports)
-        streams = list()
-        for [type, transport] in transports:
-            if transport:
-                streams.append((type, transport.setup()))
-        self.session.ffmpeg = _ffmpeg(
-            self.session.ospath, options, streams, stdout=subprocess.DEVNULL,
-            ffmpeg2=self.server._ffmpeg2)
+        self.session.start(ffmpeg2=self.server._ffmpeg2)
         self.send_response(OK)
         self.send_session()
         self.end_headers()
@@ -562,13 +554,26 @@ class Session:
         self.transports = [None] * streams
         self.ffmpeg = None
     
+    def start(self, ffmpeg2=True):
+        options = ("-re",)
+        transports = zip(_streamtypes, self.transports)
+        streams = list()
+        for [type, transport] in transports:
+            if transport:
+                streams.append((type, transport.setup()))
+        self.ffmpeg = _ffmpeg(self.ospath, options, streams, ffmpeg2=ffmpeg2)
+    
     def end(self):
         if self.ffmpeg:
+            self.close_transports()
+            self.ffmpeg.terminate()
+            self.ffmpeg.wait()
+    
+    def close_transports(self):
+        if not self.ffmpeg.stdout.closed:
             for transport in self.transports:
                 if transport:
                     transport.close()
-            self.ffmpeg.terminate()
-            self.ffmpeg.wait()
     
     def other_transports(self, stream):
         return (any(self.transports[:stream]) or
