@@ -71,6 +71,13 @@ class Server(basehttp.Server):
                     fields[PORT] = b"0"  # VLC hangs or times out otherwise
                     line = b" ".join(fields)
                     streams += 1
+                if line.startswith(b"s="):
+                    # SDP specification says the session name field must be
+                    # present and non-empty, recommending a single space
+                    # where there is no name, but players tend to handle
+                    # omitting it better
+                    line = b""
+                
                 if not line.startswith(b"a=control:"):
                     sdp.write(line)
                 
