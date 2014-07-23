@@ -248,11 +248,6 @@ class Handler(basehttp.RequestHandler):
                 
                 try:
                     channel = params.get_single("interleaved")
-                    [channel, end] = net.header_partition(channel, "-")
-                    channel = int(net.header_unquote(channel))
-                    if end and int(net.header_unquote(end)) < channel + 1:
-                        msg = "Pair of channels required for RTP and RTCP"
-                        raise ValueError(msg)
                     transport = InterleavedTransport(self, channel)
                     break
                 except KeyError:
@@ -260,13 +255,7 @@ class Handler(basehttp.RequestHandler):
                 
                 udp = next(transport, "UDP").upper() == "UDP"
                 if udp and "unicast" in params:
-                    port = params.get_single("client_port")
-                    [port, end] = net.header_partition(port, "-")
-                    port = int(net.header_unquote(port))
-                    if end and int(net.header_unquote(end)) < port + 1:
-                        msg = "Pair of ports required for RTP and RTCP"
-                        raise ValueError(msg)
-                    transport = UdpTransport(self.client_address[0], port)
+                    transport = UdpTransport(self, params)
                     break
                 
                 msg = ("Only unicast UDP and interleaved transports "
@@ -604,9 +593,14 @@ class Transport:
         pass
 
 class UdpTransport(Transport):
-    def __init__(self, dest, port):
-        self.dest = dest
-        self.port = port
+    def __init__(self, handler, params):
+        port = params.get_single("client_port")
+        [port, end] = net.header_partition(port, "-")
+        self.port = int(net.header_unquote(port))
+        if end and int(net.header_unquote(end)) < self.port + 1:
+            raise ValueError("Pair of ports required for RTP and RTCP")
+        
+        [self.dest, _] = handler.client_address
     
     def header(self):
         header = "RTP/AVP/UDP;unicast;destination={};client_port={}-{}"
@@ -617,8 +611,12 @@ class UdpTransport(Transport):
 
 class InterleavedTransport(Transport):
     def __init__(self, handler, channel):
+        [channel, end] = net.header_partition(channel, "-")
+        self.channel = int(net.header_unquote(channel))
+        if end and int(net.header_unquote(end)) < self.channel + 1:
+            raise ValueError("Pair of channels required for RTP and RTCP")
+        
         self.handler = handler
-        self.channel = channel
     
     def header(self):
         header = "RTP/AVP/TCP;interleaved={}-{}"
