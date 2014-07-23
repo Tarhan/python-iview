@@ -18,7 +18,7 @@ class Server(SelectableServer, http.server.HTTPServer):
         (host, port) = address
         if port is not None:
             port = self.server_port
-        self.server_address = net.formataddr((self.server_name, port))
+        self.server_address = net.format_addr((self.server_name, port))
 
 class RequestHandler(SelectableHandler, http.server.BaseHTTPRequestHandler):
     server_version = "Base-HTTP"

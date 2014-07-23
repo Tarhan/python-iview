@@ -3,7 +3,6 @@ from http.client import NOT_FOUND, OK
 from io import BytesIO
 import subprocess
 import random
-from functions import attributes
 import net
 from misc import joinpath
 import time
@@ -123,7 +122,7 @@ def _ffmpeg(file, options, streams, bufsize=0, ffmpeg2=True, **kw):
         else:
             [rtp, rtcp] = addresses
             query.append(("rtcpport", rtcp))
-        options.append(net.Url("rtp", net.formataddr(rtp),
+        options.append(net.Url("rtp", net.format_addr(rtp),
             query=urlencode(query)).geturl())
         
         if not ffmpeg2 and i:
@@ -661,10 +660,9 @@ class InterleavedHandler(BaseRequestHandler):
         self.server.file.write(packet)
         self.server.file.flush()
 
-@attributes(param_types=dict(port=int))
-def main(port=None, *, noffmpeg2=False):
+def main(address="", *, noffmpeg2=False):
     with selectors.DefaultSelector() as selector, \
-    Server(("", port), ffmpeg2=not noffmpeg2) as server:
+    Server(net.parse_addr(address), ffmpeg2=not noffmpeg2) as server:
         print(server.server_address)
         server.register(selector)
         while True:
