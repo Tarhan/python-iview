@@ -6,7 +6,7 @@ import random
 from functions import attributes
 import net
 from misc import joinpath
-from selectors import DefaultSelector
+import selectors
 import sys
 from utils import SelectableServer
 from utils import RewindableReader
@@ -30,8 +30,7 @@ class Server(basehttp.Server):
             "-print_format", "compact=print_section=0:nokey=1:escape=none",
             file,
         )
-        with _ffmpeg_command("ffprobe", options,
-        stdout=subprocess.PIPE, bufsize=-1) as ffprobe:
+        with _ffmpeg_command("ffprobe", options, bufsize=-1) as ffprobe:
             duration = ffprobe.stdout.read().strip()
         if ffprobe.returncode:
             msg = "ffprobe returned exit status {}"
@@ -41,7 +40,7 @@ class Server(basehttp.Server):
         streams = ((type, None) for type in _streamtypes)
         ffmpeg = _ffmpeg(file, options, streams,
             loglevel="error",  # Avoid empty output warning caused by "-t 0"
-            stdout=subprocess.PIPE, bufsize=-1,
+            bufsize=-1,
             ffmpeg2=self._ffmpeg2,
         )
         with ffmpeg:
@@ -89,7 +88,7 @@ class Server(basehttp.Server):
 
 _streamtypes = ("video", "audio")
 
-def _ffmpeg(file, options, streams, ffmpeg2=True, **kw):
+def _ffmpeg(file, options, streams, bufsize=0, ffmpeg2=True, **kw):
     """Spawn an FF MPEG child process
     
     * options: CLI arguments to include
@@ -118,12 +117,13 @@ def _ffmpeg(file, options, streams, ffmpeg2=True, **kw):
             options += ("-new" + type,)
         first = False
     
-    return _ffmpeg_command("ffmpeg", options, **kw)
+    return _ffmpeg_command("ffmpeg", options, bufsize=bufsize, **kw)
 
 def _ffmpeg_command(command, options, loglevel="warning", **popenargs):
     command = [command, "-loglevel", loglevel]
     command.extend(options)
-    return subprocess.Popen(command, stdin=subprocess.DEVNULL, **popenargs)
+    return subprocess.Popen(command,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, **popenargs)
 
 class Handler(basehttp.RequestHandler):
     server_version = "RTSP-server " + basehttp.RequestHandler.server_version
@@ -377,7 +377,8 @@ class Handler(basehttp.RequestHandler):
             raise basehttp.ErrorResponse(
                 HEADER_FIELD_NOT_VALID_FOR_RESOURCE, err)
         
-        self.session.start(ffmpeg2=self.server._ffmpeg2)
+        self.session.start(self.server.selector,
+            ffmpeg2=self.server._ffmpeg2)
         self.send_response(OK)
         self.send_session()
         self.end_headers()
@@ -554,7 +555,7 @@ class Session:
         self.transports = [None] * streams
         self.ffmpeg = None
     
-    def start(self, ffmpeg2=True):
+    def start(self, selector, ffmpeg2=True):
         options = ("-re",)
         transports = zip(_streamtypes, self.transports)
         streams = list()
@@ -562,6 +563,9 @@ class Session:
             if transport:
                 streams.append((type, transport.setup()))
         self.ffmpeg = _ffmpeg(self.ospath, options, streams, ffmpeg2=ffmpeg2)
+        self.selector = selector
+        self.selector.register(self.ffmpeg.stdout, selectors.EVENT_READ,
+            self)
     
     def end(self):
         if self.ffmpeg:
@@ -569,8 +573,14 @@ class Session:
             self.ffmpeg.terminate()
             self.ffmpeg.wait()
     
+    def handle_select(self):
+        if not self.ffmpeg.stdout.read(0x10000):
+            self.close_transports()
+    
     def close_transports(self):
         if not self.ffmpeg.stdout.closed:
+            self.selector.unregister(self.ffmpeg.stdout)
+            self.ffmpeg.stdout.close()
             for transport in self.transports:
                 if transport:
                     transport.close()
@@ -630,7 +640,7 @@ class InterleavedHandler(BaseRequestHandler):
 
 @attributes(param_types=dict(port=int))
 def main(port=None, *, noffmpeg2=False):
-    with DefaultSelector() as selector, \
+    with selectors.DefaultSelector() as selector, \
     Server(("", port), ffmpeg2=not noffmpeg2) as server:
         print(server.server_address)
         server.register(selector)
