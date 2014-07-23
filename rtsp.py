@@ -30,7 +30,7 @@ class Server(basehttp.Server):
             "-print_format", "compact=print_section=0:nokey=1:escape=none",
             file,
         )
-        with self._ffmpeg_command("ffprobe", options,
+        with _ffmpeg_command("ffprobe", options,
         stdout=subprocess.PIPE, bufsize=-1) as ffprobe:
             duration = ffprobe.stdout.read().strip()
         if ffprobe.returncode:
@@ -38,10 +38,11 @@ class Server(basehttp.Server):
             raise EnvironmentError(msg.format(ffprobe.returncode))
         
         options = ("-t", "0")  # Stop before processing any video
-        streams = ((type, None) for type in self._streamtypes)
-        ffmpeg = self._ffmpeg(file, options, streams,
+        streams = ((type, None) for type in _streamtypes)
+        ffmpeg = _ffmpeg(file, options, streams,
             loglevel="error",  # Avoid empty output warning caused by "-t 0"
             stdout=subprocess.PIPE, bufsize=-1,
+            ffmpeg2=self._ffmpeg2,
         )
         with ffmpeg:
             sdp = BytesIO()
@@ -85,45 +86,44 @@ class Server(basehttp.Server):
             (_, session) = self._sessions.popitem()
             session.end()
         return basehttp.Server.server_close(self, *pos, **kw)
+
+_streamtypes = ("video", "audio")
+
+def _ffmpeg(file, options, streams, ffmpeg2=True, **kw):
+    """Spawn an FF MPEG child process
     
-    _streamtypes = ("video", "audio")
+    * options: CLI arguments to include
+    * streams: Output an RTP stream for each of these
+    """
+    options = list(options) + ["-i", file]
     
-    def _ffmpeg(self, file, options, streams, **kw):
-        """Spawn an FF MPEG child process
+    for (i, (type, address)) in enumerate(streams):
+        t = type[0]
+        if ffmpeg2:
+            options.extend(("-map", "0:" + t))
+        options.extend(("-{}codec".format(t), "copy"))
+        options.extend("-{}n".format(other[0]) for
+            other in _streamtypes if other != type)
         
-        * options: CLI arguments to include
-        * streams: Output an RTP stream for each of these
-        """
-        options = list(options) + ["-i", file]
+        options.extend(("-f", "rtp"))
+        query = list()
+        if not address:
+            # Avoid null or zero port because FF MPEG emits an error,
+            # although only after outputting the SDP data,
+            # and "libav" does not emit the error.
+            address = ("localhost", 6970 + i * 2)
+        options.append(net.Url("rtp", net.formataddr(rtp)).geturl())
         
-        for (i, (type, address)) in enumerate(streams):
-            t = type[0]
-            if self._ffmpeg2:
-                options.extend(("-map", "0:" + t))
-            options.extend(("-{}codec".format(t), "copy"))
-            options.extend("-{}n".format(other[0]) for
-                other in self._streamtypes if other != type)
-            
-            options.extend(("-f", "rtp"))
-            if not address:
-                # Avoid null or zero port because FF MPEG emits an error,
-                # although only after outputting the SDP data,
-                # and "libav" does not emit the error.
-                address = ("localhost", 6970 + i * 2)
-            options.append(net.Url("rtp", net.formataddr(address)).geturl())
-            
-            if not self._ffmpeg2 and i:
-                options += ("-new" + type,)
-            first = False
-        
-        return self._ffmpeg_command("ffmpeg", options, **kw)
+        if not ffmpeg2 and i:
+            options += ("-new" + type,)
+        first = False
     
-    def _ffmpeg_command(self, command, options,
-    loglevel="warning", **popenargs):
-        command = [command, "-loglevel", loglevel]
-        command.extend(options)
-        return subprocess.Popen(command, stdin=subprocess.DEVNULL,
-            **popenargs)
+    return _ffmpeg_command("ffmpeg", options, **kw)
+
+def _ffmpeg_command(command, options, loglevel="warning", **popenargs):
+    command = [command, "-loglevel", loglevel]
+    command.extend(options)
+    return subprocess.Popen(command, stdin=subprocess.DEVNULL, **popenargs)
 
 class Handler(basehttp.RequestHandler):
     server_version = "RTSP-server " + basehttp.RequestHandler.server_version
@@ -383,8 +383,9 @@ class Handler(basehttp.RequestHandler):
         for [type, transport] in transports:
             if transport:
                 streams.append((type, transport.setup()))
-        self.session.ffmpeg = self.server._ffmpeg(
-            self.session.ospath, options, streams, stdout=subprocess.DEVNULL)
+        self.session.ffmpeg = _ffmpeg(
+            self.session.ospath, options, streams, stdout=subprocess.DEVNULL,
+            ffmpeg2=self.server._ffmpeg2)
         self.send_response(OK)
         self.send_session()
         self.end_headers()
