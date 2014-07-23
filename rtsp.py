@@ -12,6 +12,7 @@ from utils import SelectableServer
 from utils import RewindableReader
 from socketserver import UDPServer, BaseRequestHandler
 from struct import Struct
+from urllib.parse import urlencode
 
 _SESSION_DIGITS = 25
 
@@ -96,7 +97,7 @@ def _ffmpeg(file, options, streams, bufsize=0, ffmpeg2=True, **kw):
     """
     options = list(options) + ["-i", file]
     
-    for (i, (type, address)) in enumerate(streams):
+    for (i, (type, addresses)) in enumerate(streams):
         t = type[0]
         if ffmpeg2:
             options.extend(("-map", "0:" + t))
@@ -106,12 +107,16 @@ def _ffmpeg(file, options, streams, bufsize=0, ffmpeg2=True, **kw):
         
         options.extend(("-f", "rtp"))
         query = list()
-        if not address:
+        if not addresses:
             # Avoid null or zero port because FF MPEG emits an error,
             # although only after outputting the SDP data,
             # and "libav" does not emit the error.
-            address = ("localhost", 6970 + i * 2)
-        options.append(net.Url("rtp", net.formataddr(rtp)).geturl())
+            rtp = ("localhost", 6970 + i * 2)
+        else:
+            [rtp, rtcp] = addresses
+            query.append(("rtcpport", rtcp))
+        options.append(net.Url("rtp", net.formataddr(rtp),
+            query=urlencode(query)).geturl())
         
         if not ffmpeg2 and i:
             options += ("-new" + type,)
@@ -243,8 +248,11 @@ class Handler(basehttp.RequestHandler):
                 
                 try:
                     channel = params.get_single("interleaved")
-                    [channel, _] = net.header_partition(channel, "-")
+                    [channel, end] = net.header_partition(channel, "-")
                     channel = int(net.header_unquote(channel))
+                    if end and int(net.header_unquote(end)) < channel + 1:
+                        msg = "Pair of channels required for RTP and RTCP"
+                        raise ValueError(msg)
                     transport = InterleavedTransport(self, channel)
                     break
                 except KeyError:
@@ -253,8 +261,11 @@ class Handler(basehttp.RequestHandler):
                 udp = next(transport, "UDP").upper() == "UDP"
                 if udp and "unicast" in params:
                     port = params.get_single("client_port")
-                    [port, _] = net.header_partition(port, "-")
+                    [port, end] = net.header_partition(port, "-")
                     port = int(net.header_unquote(port))
+                    if end and int(net.header_unquote(end)) < port + 1:
+                        msg = "Pair of ports required for RTP and RTCP"
+                        raise ValueError(msg)
                     transport = UdpTransport(self.client_address[0], port)
                     break
                 
@@ -599,11 +610,11 @@ class UdpTransport(Transport):
         self.port = port
     
     def header(self):
-        header = "RTP/AVP/UDP;unicast;destination={};client_port={}"
-        return header.format(self.dest, self.port)
+        header = "RTP/AVP/UDP;unicast;destination={};client_port={}-{}"
+        return header.format(self.dest, self.port, self.port + 1)
     
     def setup(self):
-        return (self.dest, self.port)
+        return ((self.dest, self.port), self.port + 1)
 
 class InterleavedTransport(Transport):
     def __init__(self, handler, channel):
@@ -611,18 +622,22 @@ class InterleavedTransport(Transport):
         self.channel = channel
     
     def header(self):
-        header = "RTP/AVP/TCP;interleaved={}"
-        return header.format(self.channel)
+        header = "RTP/AVP/TCP;interleaved={}-{}"
+        return header.format(self.channel, self.channel + 1)
     
     def setup(self):
-        self.listener = RtpListener(self.handler.wfile, self.channel)
-        self.listener.register(self.handler.server.selector)
-        return self.listener.server_address
+        self.rtp = UdpListener(self.handler.wfile, self.channel)
+        self.rtp.register(self.handler.server.selector)
+        self.rtcp = UdpListener(self.handler.wfile, self.channel + 1)
+        self.rtcp.register(self.handler.server.selector)
+        [_, rtcp] = self.rtcp.server_address
+        return (self.rtp.server_address, rtcp)
     
     def close(self):
-        self.listener.close()
+        self.rtcp.close()
+        self.rtp.close()
 
-class RtpListener(SelectableServer, UDPServer):
+class UdpListener(SelectableServer, UDPServer):
     def __init__(self, file, channel):
         self.file = file
         self.channel = channel
