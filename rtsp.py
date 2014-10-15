@@ -679,7 +679,7 @@ def main(port=None, *, noffmpeg2=False):
 
 if __name__ == "__main__":
     try:
-        from funcparams import command
-        command()
+        import clifunc
+        clifunc.run()
     except (KeyboardInterrupt, BrokenPipeError):
         raise SystemExit(1)
