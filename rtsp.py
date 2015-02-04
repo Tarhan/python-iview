@@ -244,6 +244,7 @@ class Handler(basehttp.RequestHandler):
             raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE, msg)
         
         error = None
+        single_error = False
         for transport in net.header_list(self.headers, "Transport"):
             try:
                 [transport, params] = net.header_partition(transport, ";")
@@ -274,10 +275,10 @@ class Handler(basehttp.RequestHandler):
                     "supported")
                 raise ValueError(msg)
             except (ValueError, KeyError) as exc:
-                multierror = error
+                single_error = error is None
                 error = format(exc)
         else:  # No suitable transport found
-            if not error or multierror:
+            if not single_error:
                 error = ("No supported unicast UDP or interleaved transport "
                     "given")
             raise basehttp.ErrorResponse(UNSUPPORTED_TRANSPORT, error)
