@@ -1,9 +1,8 @@
 import basehttp
 from http.client import NOT_FOUND, OK
-from io import BytesIO
+from io import BytesIO, TextIOWrapper
 import subprocess
 import random
-from functions import attributes
 import net
 from misc import joinpath
 import time
@@ -14,6 +13,7 @@ from utils import RewindableReader
 from socketserver import UDPServer, BaseRequestHandler
 from struct import Struct
 from urllib.parse import urlencode
+import json
 
 _SESSION_DIGITS = 25
 
@@ -28,15 +28,17 @@ class Server(basehttp.Server):
     
     def _get_sdp(self, file):
         options = (
-            "-show_entries", "format=duration",
-            "-print_format", "compact=print_section=0:nokey=1:escape=none",
+            "-show_entries", "format=duration : format_tags=title",
+            "-print_format", "json",
             file,
         )
-        with _ffmpeg_command("ffprobe", options, bufsize=-1) as ffprobe:
-            duration = ffprobe.stdout.read().strip()
+        with _ffmpeg_command("ffprobe", options, bufsize=-1) as ffprobe, \
+        TextIOWrapper(ffprobe.stdout, "ascii") as metadata:
+            metadata = json.load(metadata)
         if ffprobe.returncode:
             msg = "ffprobe returned exit status {}"
             raise EnvironmentError(msg.format(ffprobe.returncode))
+        notitle = "title" not in metadata["format"].get("tags", dict())
         
         options = ("-t", "0")  # Stop before processing any video
         streams = ((type, None) for type in _streamtypes)
@@ -61,7 +63,9 @@ class Server(basehttp.Server):
                         control = "a=control:{}\r\n".format(streams - 1)
                         sdp.write(control.encode("ascii"))
                     else:  # End of the top session-level section
-                        sdp.write(b"a=range:npt=0-" + duration + b"\r\n")
+                        range = "a=range:npt=0-{}\r\n"
+                        range = range.format(metadata["format"]["duration"])
+                        sdp.write(range.encode("ascii"))
                 if end:
                     break
                 
@@ -71,7 +75,7 @@ class Server(basehttp.Server):
                     fields[PORT] = b"0"  # VLC hangs or times out otherwise
                     line = b" ".join(fields)
                     streams += 1
-                if line.startswith(b"s="):
+                if notitle and line.startswith(b"s="):
                     # SDP specification says the session name field must be
                     # present and non-empty, recommending a single space
                     # where there is no name, but players tend to handle
@@ -123,7 +127,7 @@ def _ffmpeg(file, options, streams, bufsize=0, ffmpeg2=True, **kw):
         else:
             [rtp, rtcp] = addresses
             query.append(("rtcpport", rtcp))
-        options.append(net.Url("rtp", net.formataddr(rtp),
+        options.append(net.Url("rtp", net.format_addr(rtp),
             query=urlencode(query)).geturl())
         
         if not ffmpeg2 and i:
@@ -661,10 +665,9 @@ class InterleavedHandler(BaseRequestHandler):
         self.server.file.write(packet)
         self.server.file.flush()
 
-@attributes(param_types=dict(port=int))
-def main(port=None, *, noffmpeg2=False):
+def main(address="", *, noffmpeg2=False):
     with selectors.DefaultSelector() as selector, \
-    Server(("", port), ffmpeg2=not noffmpeg2) as server:
+    Server(net.parse_addr(address), ffmpeg2=not noffmpeg2) as server:
         print(server.server_address)
         server.register(selector)
         while True:
