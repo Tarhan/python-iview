@@ -684,6 +684,8 @@ def main(address="", *, noffmpeg2=False):
         while True:
             ready = selector.select()
             for [ready, _] in ready:
+                if ready.fileobj not in selector.get_map():
+                    continue  # File unregistered since select() returned
                 try:
                     ready.data.handle_select()
                 except ConnectionError:
