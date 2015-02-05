@@ -56,9 +56,16 @@ class Server(basehttp.Server):
                 line = ffmpeg.stdout.readline()
             
             streams = 0
+            rtcp_bandwidth = False  # True if b=RR:0 written
             while line:
-                end = not line.strip()
-                if end or line.startswith(b"m="):
+                type = line.strip()[:1]  # Empty string => EOF
+                if not streams and not rtcp_bandwidth and (
+                        type in b"trzkam" or line.startswith(b"b=RR:")):
+                    sdp.write(b"b=RR:0\r\n")
+                    rtcp_bandwidth = True
+                if line.startswith(b"b=RR:"):
+                    line = b""
+                if type in b"m":
                     if streams:  # End of a media section
                         control = "a=control:{}\r\n".format(streams - 1)
                         sdp.write(control.encode("ascii"))
@@ -66,16 +73,17 @@ class Server(basehttp.Server):
                         range = "a=range:npt=0-{}\r\n"
                         range = range.format(metadata["format"]["duration"])
                         sdp.write(range.encode("ascii"))
-                if end:
+                    rtcp_bandwidth = False
+                if not type:
                     break
                 
-                if line.startswith(b"m="):
+                if type == b"m":
                     fields = line.split(maxsplit=2)
                     PORT = 1
                     fields[PORT] = b"0"  # VLC hangs or times out otherwise
                     line = b" ".join(fields)
                     streams += 1
-                if notitle and line.startswith(b"s="):
+                if notitle and type == b"s":
                     # SDP specification says the session name field must be
                     # present and non-empty, recommending a single space
                     # where there is no name, but players tend to handle
@@ -150,11 +158,11 @@ class Handler(basehttp.RequestHandler):
     def setup(self):
         basehttp.RequestHandler.setup(self)
         self.rfile = RollbackReader(self.rfile)
-        self.interleaved = set()
+        self.channels = dict()
     
     def finish(self):
-        while self.interleaved:
-            next(iter(self.interleaved)).close()
+        while self.channels:
+            next(iter(self.channels.values())).close()
         return basehttp.RequestHandler.finish(self)
     
     def handle_one_request(self):
@@ -162,7 +170,9 @@ class Handler(basehttp.RequestHandler):
         c = self.rfile.read(1)
         if c == b"$":
             self.rfile.drop_capture()
-            raise NotImplementedError("Interleaved packet")
+            self.handle_interleaved()
+            self.close_connection = False
+            return
         self.rfile.roll_back()
         return basehttp.RequestHandler.handle_one_request(self)
     
@@ -545,6 +555,16 @@ class Handler(basehttp.RequestHandler):
         key = "{:0{}X};timeout=86400"
         key = key.format(self.sessionkey, _SESSION_DIGITS)
         self.send_header("Session", key)
+    
+    def handle_interleaved(self):
+        # Drop RT(C)P traffic sent from client; FF MPEG CLI doesn't seem to
+        # have a way to get the local RT(C)P ports
+        header = self.rfile.read(self.interleaved_header.size)
+        [channel, length] = self.interleaved_header.unpack(header)
+        while length:
+            length -= len(self.rfile.read(min(length, 0x10000)))
+    
+    interleaved_header = Struct("!BH")
 
 Handler.responses = dict(Handler.responses)  # Copy from base class
 for (code, message) in (
@@ -645,36 +665,37 @@ class InterleavedTransport(Transport):
         return header.format(self.channel, self.channel + 1)
     
     def setup(self):
-        self.rtp = UdpListener(self.handler.wfile, self.channel)
+        self.rtp = UdpListener(self.handler, self.channel)
         self.rtp.register(self.handler.server.selector)
-        self.rtcp = UdpListener(self.handler.wfile, self.channel + 1)
+        self.rtcp = UdpListener(self.handler, self.channel + 1)
         self.rtcp.register(self.handler.server.selector)
-        self.handler.interleaved.add(self)
         [_, rtcp] = self.rtcp.server_address
         return (self.rtp.server_address, rtcp)
     
     def close(self):
-        if self not in self.handler.interleaved:
-            return
-        self.handler.interleaved.remove(self)
         self.rtcp.close()
         self.rtp.close()
 
 class UdpListener(SelectableServer, UDPServer):
-    def __init__(self, file, channel):
-        self.file = file
+    def __init__(self, connection, channel):
+        self.connection = connection
         self.channel = channel
         SelectableServer.__init__(self,
             RequestHandlerClass=InterleavedHandler)
+        self.connection.channels[self.channel] = self
+    
+    def close(self):
+        if self.connection.channels.pop(self.channel, None):
+            SelectableServer.close(self)
 
 class InterleavedHandler(BaseRequestHandler):
     header = Struct("!cBH")
     def handle(self):
         [packet, _] = self.request
         header = self.header.pack(b"$", self.server.channel, len(packet))
-        self.server.file.write(header)
-        self.server.file.write(packet)
-        self.server.file.flush()
+        self.server.connection.wfile.write(header)
+        self.server.connection.wfile.write(packet)
+        self.server.connection.wfile.flush()
 
 def main(address="", *, noffmpeg2=False):
     with selectors.DefaultSelector() as selector, \
