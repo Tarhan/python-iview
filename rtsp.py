@@ -9,7 +9,7 @@ import time
 import selectors
 import sys
 from utils import SelectableServer
-from utils import RewindableReader
+from utils import RollbackReader
 from socketserver import UDPServer, BaseRequestHandler
 from struct import Struct
 from urllib.parse import urlencode
@@ -149,7 +149,7 @@ class Handler(basehttp.RequestHandler):
     
     def setup(self):
         basehttp.RequestHandler.setup(self)
-        self.rfile = RewindableReader(self.rfile)
+        self.rfile = RollbackReader(self.rfile)
         self.interleaved = set()
     
     def finish(self):
@@ -158,12 +158,12 @@ class Handler(basehttp.RequestHandler):
         return basehttp.RequestHandler.finish(self)
     
     def handle_one_request(self):
-        self.rfile.capture()
+        self.rfile.start_capture()
         c = self.rfile.read(1)
         if c == b"$":
-            self.rfile.commit()
+            self.rfile.drop_capture()
             raise NotImplementedError("Interleaved packet")
-        self.rfile.rewind()
+        self.rfile.roll_back()
         return basehttp.RequestHandler.handle_one_request(self)
     
     def get_encoding(self, protocol):

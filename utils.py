@@ -3,7 +3,7 @@ import net
 import selectors
 from socketserver import StreamRequestHandler
 
-class RewindableReader(BufferedIOBase):
+class RollbackReader(BufferedIOBase):
     def __init__(self, wrapped):
         self.wrapped = wrapped
         self.readbuffer = BytesIO()
@@ -11,11 +11,11 @@ class RewindableReader(BufferedIOBase):
     def fileno(self, *pos, **kw):
         return self.wrapped.fileno(*pos, **kw)
     
-    def capture(self):
+    def start_capture(self):
         self.writebuffer = BytesIO()
-    def commit(self):
+    def drop_capture(self):
         self.writebuffer = None
-    def rewind(self):
+    def roll_back(self):
         self.readbuffer = self.writebuffer
         self.readbuffer.seek(0)
         self.writebuffer = None
