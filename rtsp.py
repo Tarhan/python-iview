@@ -150,6 +150,12 @@ class Handler(basehttp.RequestHandler):
     def setup(self):
         basehttp.RequestHandler.setup(self)
         self.rfile = RewindableReader(self.rfile)
+        self.interleaved = set()
+    
+    def finish(self):
+        while self.interleaved:
+            next(iter(self.interleaved)).close()
+        return basehttp.RequestHandler.finish(self)
     
     def handle_one_request(self):
         self.rfile.capture()
@@ -643,10 +649,14 @@ class InterleavedTransport(Transport):
         self.rtp.register(self.handler.server.selector)
         self.rtcp = UdpListener(self.handler.wfile, self.channel + 1)
         self.rtcp.register(self.handler.server.selector)
+        self.handler.interleaved.add(self)
         [_, rtcp] = self.rtcp.server_address
         return (self.rtp.server_address, rtcp)
     
     def close(self):
+        if self not in self.handler.interleaved:
+            return
+        self.handler.interleaved.remove(self)
         self.rtcp.close()
         self.rtp.close()
 
