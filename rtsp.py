@@ -410,6 +410,8 @@ class Handler(basehttp.RequestHandler):
             ffmpeg2=self.server._ffmpeg2)
         self.send_response(OK)
         self.send_session()
+        range = "npt={:f}-".format(self.session.pause_point)
+        self.send_header("Range", range)
         self.end_headers()
     
     def do_PAUSE(self):
@@ -430,13 +432,15 @@ class Handler(basehttp.RequestHandler):
                 msg)
         
         if self.session.ffmpeg:
-            self.session.pause_point += time.monotonic() - self.session.started
+            stopped = time.monotonic()
             msg = "FF MPEG exit status {}".format(self.session.end())
             self.session.ffmpeg = None
+            self.session.pause_point += stopped - self.session.started
         else:
             msg = "Already paused"
         self.send_response(OK, msg)
         self.send_session()
+        self.send_header("Range", "npt={:f}".format(self.session.pause_point))
         self.end_headers()
     
     def parse_path(self):
