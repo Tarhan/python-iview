@@ -32,8 +32,8 @@ class Server(basehttp.Server):
             "-print_format", "json",
             file,
         )
-        with _ffmpeg_command("ffprobe", options, bufsize=-1) as ffprobe, \
-        TextIOWrapper(ffprobe.stdout, "ascii") as metadata:
+        ffprobe = _ffmpeg_command("ffprobe", options, stdout=subprocess.PIPE)
+        with ffprobe, TextIOWrapper(ffprobe.stdout, "ascii") as metadata:
             metadata = json.load(metadata)
         if ffprobe.returncode:
             msg = "ffprobe returned exit status {}"
@@ -44,7 +44,7 @@ class Server(basehttp.Server):
         streams = ((type, None) for type in _streamtypes)
         ffmpeg = _ffmpeg(file, options, streams,
             loglevel="error",  # Avoid empty output warning caused by "-t 0"
-            bufsize=-1,
+            stdout=subprocess.PIPE,
             ffmpeg2=self._ffmpeg2,
         )
         with ffmpeg:
@@ -109,7 +109,7 @@ class Server(basehttp.Server):
 
 _streamtypes = ("video", "audio")
 
-def _ffmpeg(file, options, streams, bufsize=0, ffmpeg2=True, **kw):
+def _ffmpeg(file, options, streams, ffmpeg2=True, **kw):
     """Spawn an FF MPEG child process
     
     * options: CLI arguments to include before the input (-i) parameter
@@ -142,13 +142,12 @@ def _ffmpeg(file, options, streams, bufsize=0, ffmpeg2=True, **kw):
             options += ("-new" + type,)
         first = False
     
-    return _ffmpeg_command("ffmpeg", options, bufsize=bufsize, **kw)
+    return _ffmpeg_command("ffmpeg", options, **kw)
 
 def _ffmpeg_command(command, options, loglevel="warning", **popenargs):
     command = [command, "-loglevel", loglevel]
     command.extend(options)
-    return subprocess.Popen(command,
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, **popenargs)
+    return subprocess.Popen(command, stdin=subprocess.DEVNULL, **popenargs)
 
 class Handler(basehttp.RequestHandler):
     server_version = "RTSP-server " + basehttp.RequestHandler.server_version
@@ -409,8 +408,7 @@ class Handler(basehttp.RequestHandler):
             raise basehttp.ErrorResponse(
                 HEADER_FIELD_NOT_VALID_FOR_RESOURCE, err)
         
-        self.session.start(self.server.selector,
-            ffmpeg2=self.server._ffmpeg2)
+        self.session.start(ffmpeg2=self.server._ffmpeg2)
         self.send_response(OK)
         self.send_session()
         range = "npt={:f}-".format(self.session.pause_point)
@@ -602,17 +600,15 @@ class Session:
         self.ffmpeg = None
         self.pause_point = 0
     
-    def start(self, selector, ffmpeg2=True):
+    def start(self, ffmpeg2=True):
         options = ("-re", "-ss", format(self.pause_point, "f"))
         transports = zip(_streamtypes, self.transports)
         streams = list()
         for [type, transport] in transports:
             if transport:
                 streams.append((type, transport.setup()))
-        self.ffmpeg = _ffmpeg(self.ospath, options, streams, ffmpeg2=ffmpeg2)
-        self.selector = selector
-        self.selector.register(self.ffmpeg.stdout, selectors.EVENT_READ,
-            self)
+        self.ffmpeg = _ffmpeg(self.ospath, options, streams, ffmpeg2=ffmpeg2,
+            stdout=subprocess.DEVNULL)
         self.started = time.monotonic()
     
     def end(self):
@@ -621,17 +617,10 @@ class Session:
             self.ffmpeg.terminate()
             return self.ffmpeg.wait()
     
-    def handle_select(self):
-        if not self.ffmpeg.stdout.read(0x10000):
-            self.close_transports()
-    
     def close_transports(self):
-        if not self.ffmpeg.stdout.closed:
-            self.selector.unregister(self.ffmpeg.stdout)
-            self.ffmpeg.stdout.close()
-            for transport in self.transports:
-                if transport:
-                    transport.close()
+        for transport in self.transports:
+            if transport:
+                transport.close()
     
     def other_transports(self, stream):
         return (any(self.transports[:stream]) or
