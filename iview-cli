@@ -217,28 +217,31 @@ def parse_proxy_argument(proxy):
 
 def main():
     params = argparse.ArgumentParser()
-    params.add_argument("-i", "--index", action="store_true",
+    
+    actions = params.add_argument_group("main actions")
+    actions.add_argument("-i", "--index", action="store_true",
         help="print the iView index (number is the series ID)")
-    params.add_argument("-s", "--series", metavar="<id>",
+    actions.add_argument("-s", "--series", metavar="<id>",
         help="get the list of programmes for the series")
-    params.add_argument("-k", "--category", metavar="<keyword>",
+    actions.add_argument("-k", "--category", metavar="<keyword>",
         help="list programmes matching a category keyword")
-    params.add_argument("-p", "--programme", action="store_true",
+    actions.add_argument("-p", "--programme", action="store_true",
         help="""list all iView programmes at once""")
-    params.add_argument("-d", "--download", metavar="<url>",
+    actions.add_argument("-d", "--download", metavar="<url>",
         help="""download a programme
         (pass the url you got from -s, -k or -p)""")
-    params.add_argument("-t", "--subtitles" , metavar="<url>",
+    actions.add_argument("-t", "--subtitles" , metavar="<url>",
         help="""download subtitles in SRT format for a programme
         (pass the same url as for --download)""")
+    actions.add_argument("--batch", metavar="<file>",
+        help="specify a batch operation file (for cronjob etc)")
+    actions.add_argument("--bindex", action="store_true",
+        help="like --index but output is in batchfile format")
+    actions.add_argument("-a", "--print-auth", action="store_true",
+        help="print debug iView auth information")
+    
     params.add_argument("-o", "--output", metavar="<file>",
         help="specify a file to output to (use - for stdout)")
-    params.add_argument("--batch", metavar="<file>",
-        help="specify a batch operation file (for cronjob etc)")
-    params.add_argument("--bindex", action="store_true",
-        help="like --index but output is in batchfile format")
-    params.add_argument("-a", "--print-auth", action="store_true",
-        help="print debug iView auth information")
     params.add_argument("-c", "--cache", metavar="<dir>",
         help="use cache directory for debugging")
     params.add_argument("--host", metavar="<name>",
