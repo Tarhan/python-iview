@@ -112,7 +112,7 @@ _streamtypes = ("video", "audio")
 def _ffmpeg(file, options, streams, bufsize=0, ffmpeg2=True, **kw):
     """Spawn an FF MPEG child process
     
-    * options: CLI arguments to include
+    * options: CLI arguments to include before the input (-i) parameter
     * streams: Output an RTP stream for each of these
     """
     options = list(options) + ["-i", file]
@@ -603,7 +603,7 @@ class Session:
         self.pause_point = 0
     
     def start(self, selector, ffmpeg2=True):
-        options = ("-re",)
+        options = ("-re", "-ss", format(self.pause_point, "f"))
         transports = zip(_streamtypes, self.transports)
         streams = list()
         for [type, transport] in transports:
