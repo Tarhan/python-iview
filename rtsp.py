@@ -397,6 +397,9 @@ class Handler(basehttp.RequestHandler):
                     raise ValueError("Start time parameter not supported")
                 npt = range.get_single("npt")
                 [npt, end] = net.header_partition(npt, "-")
+                if end:
+                    raise ValueError("End point not supported")
+                self.session.pause_point = float(npt)
         except KeyError:  # Missing "npt" parameter
             self.send_response(NOT_IMPLEMENTED, "Only NPT range supported")
             self.send_header("Accept-Ranges", "npt")
