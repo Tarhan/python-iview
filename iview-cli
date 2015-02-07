@@ -88,6 +88,9 @@ def download(url, output=None):
     config()
     iview.fetch.fetch_program(url, execvp=True, dest_file=output)
 
+def play(file):
+    config()
+
 def batch(batch_file):
     config()
 
@@ -233,6 +236,9 @@ def main():
     actions.add_argument("-t", "--subtitles" , metavar="<url>",
         help="""download subtitles in SRT format for a programme
         (pass the same url as for --download)""")
+    actions.add_argument("-y", "--play", metavar="<url>",
+        help="""stream a programme to a media player
+        (pass the same url as for --download)""")
     actions.add_argument("--batch", metavar="<file>",
         help="specify a batch operation file (for cronjob etc)")
     actions.add_argument("--bindex", action="store_true",
@@ -287,6 +293,8 @@ def main():
         download(args.download, args.output)
     elif args.subtitles is not None:
         subtitles(args.subtitles, args.output)
+    elif args.play is not None:
+        play(args.play)
     elif args.batch is not None:
         batch(args.batch)
 
