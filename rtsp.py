@@ -339,22 +339,22 @@ class Handler(basehttp.RequestHandler):
             return
         
         if self.stream is None:
-            session = self.server._sessions.pop(self.sessionkey)
-            msg = "FF MPEG exit status {}".format(session.end())
+            del self.server._sessions[self.sessionkey]
+            self.session.end()
+            msg = "Session invalidated"
         else:
-            if (self.session.ffmpeg and
-            self.session.other_transports(stream)):
-                msg = "Partial TEARDOWN not supported while streaming"
-                raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE,
-                    msg)
+            if self.session.ffmpeg:
+                if self.session.other_transports(stream):
+                    msg = "Partial TEARDOWN not supported while streaming"
+                    raise basehttp.ErrorResponse(
+                        METHOD_NOT_VALID_IN_THIS_STATE, msg)
+                self.session.end()
             
-            msg = None
-            if not self.session.transports[self.stream]:
+            if self.session.transports[self.stream]:
+                self.session.transports[self.stream] = None
+                msg = "Stream {} closed".format(self.stream)
+            else:
                 msg = "Stream {} not set up".format(self.stream)
-            self.session.transports[self.stream] = None
-            if not any(self.session.transports):
-                session = self.server._sessions.pop(self.sessionkey)
-                msg = "FF MPEG exit status {}".format(session.end())
         self.send_response(OK, msg)
         if self.sessionkey in self.server._sessions:
             self.send_session()
