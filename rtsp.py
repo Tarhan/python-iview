@@ -432,9 +432,10 @@ class Handler(basehttp.RequestHandler):
             raise basehttp.ErrorResponse(HEADER_FIELD_NOT_VALID_FOR_RESOURCE,
                 msg)
         
+        msg = None
         if self.session.ffmpeg:
             stopped = time.monotonic()
-            msg = "FF MPEG exit status {}".format(self.session.end())
+            self.session.end()
             self.session.ffmpeg = None
             self.session.pause_point += stopped - self.session.started
         else:
@@ -614,8 +615,8 @@ class Session:
     def end(self):
         if self.ffmpeg:
             self.close_transports()
-            self.ffmpeg.terminate()
-            return self.ffmpeg.wait()
+            self.ffmpeg.kill()  # Avoid FF MPEG sending RTCP BYE messages
+            self.ffmpeg.wait()
     
     def close_transports(self):
         for transport in self.transports:
