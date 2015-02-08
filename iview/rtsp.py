@@ -1,4 +1,4 @@
-import basehttp
+from . import basehttp
 from http.client import NOT_FOUND, OK
 from io import BytesIO, TextIOWrapper
 import subprocess
