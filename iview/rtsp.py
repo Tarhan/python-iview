@@ -271,7 +271,7 @@ class Handler(basehttp.RequestHandler):
                 
                 mode = header_split(header.get_param("mode", "PLAY"), ",")
                 if frozenset(map(str.upper, mode)) != {"PLAY"}:
-                    raise ValueError("Only mode=PLAY supported")
+                    raise ValueError('Only mode="PLAY" supported')
                 
                 channel = header.get_param("interleaved")
                 if channel is not None:

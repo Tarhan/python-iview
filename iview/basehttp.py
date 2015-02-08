@@ -11,12 +11,10 @@ import urllib.parse
 from .utils import SelectableHandler
 
 class RequestHandler(SelectableHandler, http.server.BaseHTTPRequestHandler):
-    server_version = "Base-HTTP"
-    
     def handle_one_request(self):
-        self.close_connection = True
+        self.close_connection = True  # Required by base class
         self.response_started = False
-        self.requestline = "-"
+        self.requestline = "-"  # Required by base class
         self.request_version = None
         try:
             try:
