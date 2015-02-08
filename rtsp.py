@@ -7,8 +7,7 @@ import net
 from misc import joinpath
 import time
 import selectors
-import sys
-from utils import SelectableServer
+from utils import SelectableServer, select_callbacks
 from utils import RollbackReader
 from socketserver import UDPServer, BaseRequestHandler
 from struct import Struct
@@ -700,16 +699,7 @@ def main(address="", *, noffmpeg2=False):
         print(server.server_address)
         server.register(selector)
         while True:
-            ready = selector.select()
-            for [ready, _] in ready:
-                if ready.fileobj not in selector.get_map():
-                    continue  # File unregistered since select() returned
-                try:
-                    ready.data.handle_select()
-                except ConnectionError:
-                    pass
-                except Exception:
-                    sys.excepthook(*sys.exc_info())
+            select_callbacks(selector)
 
 if __name__ == "__main__":
     try:

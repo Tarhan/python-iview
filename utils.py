@@ -2,6 +2,7 @@ from io import BytesIO, BufferedIOBase
 import net
 import selectors
 from socketserver import StreamRequestHandler
+import sys
 
 class RollbackReader(BufferedIOBase):
     def __init__(self, wrapped):
@@ -38,7 +39,8 @@ class SelectableServer(net.Server):
     
     def register(self, selector):
         self.selector = selector
-        self.selector.register(self.fileno(), selectors.EVENT_READ, self)
+        self.selector.register(self.fileno(), selectors.EVENT_READ,
+            self.handle_select)
     
     def handle_select(self):
         self.selected = True
@@ -61,7 +63,8 @@ class SelectableHandler(StreamRequestHandler):
     def handle(self):
         if not self.server.selected:
             return super().handle()
-        self.server.selector.register(self.rfile, selectors.EVENT_READ, self)
+        self.server.selector.register(self.rfile, selectors.EVENT_READ,
+            self.handle_select)
         self.server.handlers.add(self)
     
     def handle_select(self):
@@ -81,3 +84,16 @@ class SelectableHandler(StreamRequestHandler):
     def finish(self):
         if not self.server.selected:
             return super().finish()
+
+def select_callbacks(selector):
+    '''Invokes the selector and then the relevant callbacks'''
+    ready = selector.select()
+    for [ready, _] in ready:
+        if ready.fileobj not in selector.get_map():
+            continue  # File unregistered since select() returned
+        try:
+            ready.data()
+        except ConnectionError:
+            pass
+        except Exception:
+            sys.excepthook(*sys.exc_info())
