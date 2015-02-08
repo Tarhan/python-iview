@@ -8,7 +8,6 @@ from http.client import NOT_IMPLEMENTED, INTERNAL_SERVER_ERROR
 from http.client import OK
 import email.parser
 import urllib.parse
-from collections.abc import Mapping
 import net
 from utils import SelectableServer, SelectableHandler
 
@@ -131,25 +130,10 @@ class RequestHandler(SelectableHandler, http.server.BaseHTTPRequestHandler):
         raise ErrorResponse(FORBIDDEN)
     do_GET = do_HEAD
     
-    def send_entity(self, type, location, data):
+    def send_entity(self, type, data):
         self.send_response(OK)
         self.send_header("Content-Type", type)
         self.send_header("Content-Length", len(data))
-        
-        url = list()
-        encoding = EncodeMap("%#?/")
-        for elem in location:
-            elem = elem.translate(encoding)
-            if elem in {".", ".."}:
-                elem = "%2E" + elem[1:]
-            url.append(elem)
-        url = "/" + "/".join(url)
-        url = net.Url(self.scheme, self.server.server_address, url).geturl()
-        
-        # Send Content-Base
-        # because many clients (FF MPEG) ignore Content-Location
-        self.send_header("Content-Base", url)
-        
         self.end_headers()
         self.wfile.write(data)
     
@@ -187,23 +171,3 @@ class ErrorResponse(Exception):
         self.code = code
         self.message = message
         Exception.__init__(self, self.code)
-
-class EncodeMap(Mapping):
-    surrogates = range(0xDC80, 0xDD00)
-    controls = range(0x20 + 1)
-    def __init__(self, reserved):
-        self.encode = set(map(ord, reserved))
-        self.encode.update(map(ord, "<>"))
-        self.encode.add(0x7F)
-    def __getitem__(self, cp):
-        if cp in self.surrogates:
-            cp -= 0xDC00
-        elif cp not in self.encode and cp not in self.controls:
-            raise KeyError()
-        return "%{:02X}".format(cp)
-    def __len__(self):
-        return len(self.reserved) + len(self.surrogates) + len(self.controls)
-    def __iter__(self):
-        yield from self.encode
-        yield from self.controls
-        yield from self.surrogates

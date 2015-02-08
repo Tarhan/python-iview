@@ -151,7 +151,6 @@ def _ffmpeg_command(command, options, loglevel="warning", **popenargs):
 class Handler(basehttp.RequestHandler):
     server_version = "RTSP-server " + basehttp.RequestHandler.server_version
     protocol_version = "RTSP/1.0"
-    scheme = "rtsp"
     
     def setup(self):
         basehttp.RequestHandler.setup(self)
@@ -223,7 +222,7 @@ class Handler(basehttp.RequestHandler):
         sdp = self.parse_media()
         if self.stream is not None:
             raise basehttp.ErrorResponse(ONLY_AGGREGATE_OPERATION_ALLOWED)
-        self.send_entity("application/sdp", tuple(self.media) + ("",), sdp)
+        self.send_entity("application/sdp", sdp)
     
     def do_SETUP(self):
         """
