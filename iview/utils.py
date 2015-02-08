@@ -233,3 +233,11 @@ def http_get(session, url, types=None, *, headers=dict(), **kw):
     except:
         response.close()
         raise
+
+def format_addr(address):
+    [address, port] = address
+    if not frozenset("[]:").isdisjoint(address):
+        address = "[{}]".format(address)
+    if port is not None:
+        address = "{}:{}".format(address, port)
+    return address

@@ -8,16 +8,7 @@ from http.client import NOT_IMPLEMENTED, INTERNAL_SERVER_ERROR
 from http.client import OK
 import email.parser
 import urllib.parse
-import net
-from utils import SelectableServer, SelectableHandler
-
-class Server(SelectableServer, http.server.HTTPServer):
-    def __init__(self, address=("", None), RequestHandlerClass=None):
-        super().__init__(address, RequestHandlerClass)
-        (host, port) = address
-        if port is not None:
-            port = self.server_port
-        self.server_address = net.format_addr((self.server_name, port))
+from utils import SelectableHandler
 
 class RequestHandler(SelectableHandler, http.server.BaseHTTPRequestHandler):
     server_version = "Base-HTTP"

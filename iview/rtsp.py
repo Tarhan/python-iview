@@ -1,9 +1,11 @@
 from . import basehttp
+from http.server import HTTPServer
 from http.client import NOT_FOUND, OK
 from io import BytesIO, TextIOWrapper
 import subprocess
 import random
 import net
+from .utils import format_addr
 from misc import joinpath
 import time
 import selectors
@@ -11,15 +13,13 @@ from utils import SelectableServer, select_callbacks
 from utils import RollbackReader
 from socketserver import UDPServer, BaseRequestHandler
 from struct import Struct
-from urllib.parse import urlencode
+import urllib.parse
 import json
 
 _SESSION_DIGITS = 25
 
-class Server(basehttp.Server):
-    default_port = 554
-    
-    def __init__(self, address=("", None), *, ffmpeg2=True):
+class Server(SelectableServer, HTTPServer):
+    def __init__(self, address, *, ffmpeg2=True):
         """ffmpeg2: Assume FF MPEG 2.1 rather than libav 0.8.6"""
         self._ffmpeg2 = ffmpeg2
         self._sessions = dict()
@@ -104,7 +104,7 @@ class Server(basehttp.Server):
         while self._sessions:
             (_, session) = self._sessions.popitem()
             session.end()
-        return basehttp.Server.server_close(self, *pos, **kw)
+        return super().server_close(*pos, **kw)
 
 _streamtypes = ("video", "audio")
 
@@ -125,17 +125,16 @@ def _ffmpeg(file, options, streams, ffmpeg2=True, **kw):
             other in _streamtypes if other != type)
         
         options.extend(("-f", "rtp", "-rtpflags", "send_bye"))
-        query = list()
         if not addresses:
             # Avoid null or zero port because FF MPEG emits an error,
             # although only after outputting the SDP data,
             # and "libav" does not emit the error.
             rtp = ("localhost", 6970 + i * 2)
+            query = ""
         else:
             [rtp, rtcp] = addresses
-            query.append(("rtcpport", rtcp))
-        options.append(net.Url("rtp", net.format_addr(rtp),
-            query=urlencode(query)).geturl())
+            query = "?" + urllib.parse.urlencode((("rtcpport", rtcp),))
+        options.append("rtp://" + format_addr(rtp) + query)
         
         if not ffmpeg2 and i:
             options += ("-new" + type,)
@@ -693,16 +692,26 @@ class InterleavedHandler(BaseRequestHandler):
         self.server.connection.wfile.flush()
 
 def main(address="", *, noffmpeg2=False):
+    url = urllib.parse.SplitResult(scheme="", netloc=address,
+        path="", query="", fragment="")
+    port = url.port
+    if port is None:
+        port = 554
+    address = (url.hostname or "", port)
+    
     with selectors.DefaultSelector() as selector, \
-    Server(net.parse_addr(address), ffmpeg2=not noffmpeg2) as server:
-        print(server.server_address)
+            Server(address, ffmpeg2=not noffmpeg2) as server:
+        port = url.port
+        if port is not None:
+            port = server.server_port
+        print("rtsp://" + format_addr((server.server_name, port)))
         server.register(selector)
         while True:
             select_callbacks(selector)
 
 if __name__ == "__main__":
     try:
-        import clifunc
-        clifunc.run()
+        from sys import argv
+        main(*argv[1:])
     except (KeyboardInterrupt, BrokenPipeError):
         raise SystemExit(1)
