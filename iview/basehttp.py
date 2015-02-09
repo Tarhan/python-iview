@@ -8,7 +8,7 @@ from http.client import NOT_IMPLEMENTED, INTERNAL_SERVER_ERROR
 from http.client import OK
 import email.parser
 import urllib.parse
-from utils import SelectableHandler
+from .utils import SelectableHandler
 
 class RequestHandler(SelectableHandler, http.server.BaseHTTPRequestHandler):
     server_version = "Base-HTTP"

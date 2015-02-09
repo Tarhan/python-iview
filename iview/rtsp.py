@@ -9,8 +9,8 @@ from .utils import format_addr
 from misc import joinpath
 import time
 import selectors
-from utils import SelectableServer, select_callbacks
-from utils import RollbackReader
+from .utils import SelectableServer, select_callbacks
+from .utils import RollbackReader
 from socketserver import UDPServer, BaseRequestHandler
 from struct import Struct
 import urllib.parse
