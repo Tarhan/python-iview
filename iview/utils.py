@@ -5,9 +5,8 @@ from io import SEEK_CUR, SEEK_END
 import urllib.request
 import http.client
 from errno import EPIPE, ESHUTDOWN, ENOTCONN, ECONNRESET
-import net
 import selectors
-from socketserver import StreamRequestHandler
+from socketserver import StreamRequestHandler, BaseServer
 import sys
 
 try:  # Python 3.3
@@ -272,7 +271,15 @@ class RollbackReader(BufferedIOBase):
             self.writebuffer.write(data)
         return data
 
-class SelectableServer(net.Server):
+class SelectableServer(BaseServer):
+    def handle_error(self, *pos, **kw):
+        '''Inhibit reporting of remote connection dropouts'''
+        [_, exc, *_] = sys.exc_info()
+        if not isinstance(exc, ConnectionError) and (
+                not isinstance(exc, EnvironmentError) or
+                    exc.errno not in DISCONNECTION_ERRNOS):
+            super().handle_error(*pos, **kw)
+
     def __init__(self, *pos, **kw):
         super().__init__(*pos, **kw)
         self.selector = None
@@ -294,12 +301,12 @@ class SelectableServer(net.Server):
             return super().process_request(*pos, **kw)
         self.finish_request(*pos, **kw)
     
-    def close(self):
+    def server_close(self):
         while self.handlers:
             next(iter(self.handlers)).close()
         if self.selector:
             self.selector.unregister(self.fileno())
-        return super().close()
+        return super().server_close()
 
 class SelectableHandler(StreamRequestHandler):
     def handle(self):

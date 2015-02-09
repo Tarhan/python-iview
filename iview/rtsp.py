@@ -667,20 +667,19 @@ class InterleavedTransport(Transport):
         return (self.rtp.server_address, rtcp)
     
     def close(self):
-        self.rtcp.close()
-        self.rtp.close()
+        self.rtcp.server_close()
+        self.rtp.server_close()
 
 class UdpListener(SelectableServer, UDPServer):
     def __init__(self, connection, channel):
         self.connection = connection
         self.channel = channel
-        SelectableServer.__init__(self,
-            RequestHandlerClass=InterleavedHandler)
+        SelectableServer.__init__(self, ("", 0), InterleavedHandler)
         self.connection.channels[self.channel] = self
     
-    def close(self):
+    def server_close(self):
         if self.connection.channels.pop(self.channel, None):
-            SelectableServer.close(self)
+            SelectableServer.server_close(self)
 
 class InterleavedHandler(BaseRequestHandler):
     header = Struct("!cBH")
@@ -699,15 +698,18 @@ def main(address="", *, noffmpeg2=False):
         port = 554
     address = (url.hostname or "", port)
     
-    with selectors.DefaultSelector() as selector, \
-            Server(address, ffmpeg2=not noffmpeg2) as server:
-        port = url.port
-        if port is not None:
-            port = server.server_port
-        print("rtsp://" + format_addr((server.server_name, port)))
-        server.register(selector)
-        while True:
-            select_callbacks(selector)
+    with selectors.DefaultSelector() as selector:
+        server = Server(address, ffmpeg2=not noffmpeg2)
+        try:
+            port = url.port
+            if port is not None:
+                port = server.server_port
+            print("rtsp://" + format_addr((server.server_name, port)))
+            server.register(selector)
+            while True:
+                select_callbacks(selector)
+        finally:
+            server.server_close()
 
 if __name__ == "__main__":
     try:
