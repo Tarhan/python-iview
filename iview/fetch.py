@@ -228,19 +228,21 @@ RTMP_PROTOCOLS = {'rtmp', 'rtmpt', 'rtmpe', 'rtmpte'}
 
 class HdsFetcher:
     def __init__(self, file, auth):
-        self.url = urljoin(auth['server'], auth['path'])
-        self.file = file
-        self.tokenhd = auth.get('tokenhd')
+        url = urljoin(auth['server'], auth['path'])
+        self.pos = (url, file, auth.get('tokenhd'))
+        self.kw = dict(
+            player=config.akamaihd_player,
+            key=config.akamaihd_key,
+        )
     
     def fetch(self, *, frontend, execvp, quiet, **kw):
         if frontend is None:
             call = hds_open_file
         else:
             call = HdsThread
-        return call(self.url, self.file, self.tokenhd,
-            frontend=frontend,
-            player=config.akamaihd_player,
-            key=config.akamaihd_key, **kw)
+        more_kw = dict(self.kw)
+        more_kw.update(kw)
+        return call(*self.pos, frontend=frontend, **more_kw)
 
 class HdsThread(threading.Thread):
     def __init__(self, *pos, frontend, **kw):
