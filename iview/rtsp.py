@@ -7,7 +7,7 @@ import random
 from .utils import format_addr
 from .utils import header_list, header_split, header_partition
 import email.message
-from misc import joinpath
+from .fetch import get_fetcher
 import time
 from .utils import SelectableServer
 from .utils import RollbackReader
@@ -36,23 +36,21 @@ class Server(SelectableServer, HTTPServer):
     
 class Media:
     def __init__(self, path):
-        self.file = joinpath(path, ".")
+        self.url = "/".join(path)
+        self.fetcher = get_fetcher(self.url)
     
     def __eq__(self, other):
         if not isinstance(other, Media):
             return NotImplemented
-        return self.file == other.file
+        return self.url == other.url
     
-    def get_metadata(self):
-        """Returns a metadata dictionary that includes the keys:
+    def get_metadata_file(self):
+        """Returns a (metadata, media-data) tuple
+        
+        The "metadata" dictionary includes the keys:
         * title (optional): string, or None (the default)
         * duration (required): real number, formattable as a string
         """
-        options = (
-            "-show_entries", "format=duration : format_tags=title",
-            "-print_format", "json",
-            self.file,
-        )
         ffprobe = _ffmpeg_command("ffprobe", options, stdout=subprocess.PIPE)
         with ffprobe, TextIOWrapper(ffprobe.stdout, "ascii") as metadata:
             metadata = json.load(metadata)
@@ -63,20 +61,20 @@ class Media:
             title=metadata["format"].get("tags", dict()).get("title"),
             duration=metadata["format"]["duration"],
         )
-        return metadata
+        return (metadata, ...)
     
     def get_sdp(self, server):
-        metadata = self.get_metadata()
+        [metadata, pipe_data] = self.get_metadata_file()
         
         options = ("-t", "0")  # Stop before processing any video
         streams = ((type, None) for type in _streamtypes)
-        ffmpeg = _ffmpeg(self.file, options, streams,
+        ffmpeg = _ffmpeg("pipe:", options, streams,
             loglevel="error",  # Avoid empty output warning caused by "-t 0"
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             ffmpeg2=server._ffmpeg2,
         )
-        [lines, _] = ffmpeg.communicate()
+        [lines, _] = ffmpeg.communicate(pipe_data)
         lines = lines.splitlines(keepends=True)
         sdp = BytesIO()
         
@@ -129,7 +127,7 @@ class Media:
         return sdp.getvalue()
     
     def get_play_file(self, start):
-        return (open(self.file, "rb"), 0)
+        return self.fetcher.get_play_file(start)
 
 _streamtypes = ("video", "audio")
 
