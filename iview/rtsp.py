@@ -6,6 +6,7 @@ import subprocess
 import random
 import net
 from .utils import format_addr
+from .utils import header_list, header_split, header_partition
 from misc import joinpath
 import time
 import selectors
@@ -257,17 +258,17 @@ class Handler(basehttp.RequestHandler):
         
         error = None
         single_error = False
-        for transport in net.header_list(self.headers, "Transport"):
+        for transport in header_list(self.headers, "Transport"):
             try:
                 [transport, params] = net.header_partition(transport, ";")
-                transport = iter(net.header_split(transport, "/"))
+                transport = iter(header_split(transport, "/"))
                 if (next(transport, "RTP").upper() != "RTP" or
                 next(transport, "AVP").upper() != "AVP"):
                     raise ValueError("Only RTP/AVP supported")
                 
                 params = net.HeaderParams(params)
                 for mode in params["mode"]:
-                    mode = net.header_split(net.header_unquote(mode), ",")
+                    mode = header_split(net.header_unquote("mode"), ",")
                     if frozenset(map(str.upper, mode)) != {"PLAY"}:
                         raise ValueError("Only mode=PLAY supported")
                 
@@ -383,7 +384,7 @@ class Handler(basehttp.RequestHandler):
             return
         
         try:
-            ranges = iter(net.header_list(self.headers, "Range"))
+            ranges = iter(header_list(self.headers, "Range"))
             range = next(ranges, None)
             if range:
                 if next(ranges, None):
@@ -392,7 +393,7 @@ class Handler(basehttp.RequestHandler):
                 if "time" in range:
                     raise ValueError("Start time parameter not supported")
                 npt = range.get_single("npt")
-                [npt, end] = net.header_partition(npt, "-")
+                [npt, end] = header_partition(npt, "-")
                 if end:
                     raise ValueError("End point not supported")
                 self.session.pause_point = float(npt)
@@ -490,7 +491,7 @@ class Handler(basehttp.RequestHandler):
         self.sessionparsed = True
         self.invalidsession = True
         self.session = None  # Indicate no session by default
-        sessions = iter(net.header_list(self.headers, "Session"))
+        sessions = iter(header_list(self.headers, "Session"))
         key = next(sessions, None)
         if not key:
             self.invalidsession = False
@@ -631,7 +632,7 @@ class Transport:
 class UdpTransport(Transport):
     def __init__(self, handler, params):
         port = params.get_single("client_port")
-        [port, end] = net.header_partition(port, "-")
+        [port, end] = header_partition(port, "-")
         self.port = int(net.header_unquote(port))
         if end and int(net.header_unquote(end)) < self.port + 1:
             raise ValueError("Pair of ports required for RTP and RTCP")
@@ -647,7 +648,7 @@ class UdpTransport(Transport):
 
 class InterleavedTransport(Transport):
     def __init__(self, handler, channel):
-        [channel, end] = net.header_partition(channel, "-")
+        [channel, end] = header_partition(channel, "-")
         self.channel = int(net.header_unquote(channel))
         if end and int(net.header_unquote(end)) < self.channel + 1:
             raise ValueError("Pair of channels required for RTP and RTCP")

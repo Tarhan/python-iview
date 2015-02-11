@@ -245,6 +245,35 @@ def format_addr(address):
         address = "{}:{}".format(address, port)
     return address
 
+def header_list(message, header):
+    for header in message.get_all(header, ()):
+        yield from header_split(header, ",")
+
+def header_split(header, delim):
+    while header:
+        [elem, header] = header_partition(header, delim)
+        if elem:
+            yield elem
+
+def header_partition(header, sep):
+    sentinelled = header + sep + '"\\'
+    pos = 0
+    while True:  # For each quoted segment
+        end = sentinelled.index(sep, pos)
+        quote = sentinelled.index('"', pos)
+        if end < quote:
+            break
+        pos = quote + 1
+        while True:  # For each backslash escape in quote
+            quote = sentinelled.index('"', pos)
+            backslash = sentinelled.index("\\", pos)
+            if quote < backslash:
+                break
+            pos = min(backslash + 2, len(header))
+        pos = min(quote + 1, len(header))
+    
+    return (header[:end].strip(), header[end + 1:].strip())
+
 class RollbackReader(BufferedIOBase):
     def __init__(self, wrapped):
         self.wrapped = wrapped
