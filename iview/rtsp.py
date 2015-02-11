@@ -4,9 +4,9 @@ from http.client import NOT_FOUND, OK
 from io import BytesIO, TextIOWrapper
 import subprocess
 import random
-import net
 from .utils import format_addr
 from .utils import header_list, header_split, header_partition
+import email.message
 from misc import joinpath
 import time
 import selectors
@@ -260,34 +260,33 @@ class Handler(basehttp.RequestHandler):
         single_error = False
         for transport in header_list(self.headers, "Transport"):
             try:
-                [transport, params] = net.header_partition(transport, ";")
+                header = email.message.Message()
+                # Default get_params() header is Content-Type
+                header["Content-Type"] = transport
+                [transport, _] = header.get_params()[0]
                 transport = iter(header_split(transport, "/"))
                 if (next(transport, "RTP").upper() != "RTP" or
                 next(transport, "AVP").upper() != "AVP"):
                     raise ValueError("Only RTP/AVP supported")
                 
-                params = net.HeaderParams(params)
-                for mode in params["mode"]:
-                    mode = header_split(net.header_unquote("mode"), ",")
-                    if frozenset(map(str.upper, mode)) != {"PLAY"}:
-                        raise ValueError("Only mode=PLAY supported")
+                mode = header_split(header.get_param("mode", "PLAY"), ",")
+                if frozenset(map(str.upper, mode)) != {"PLAY"}:
+                    raise ValueError("Only mode=PLAY supported")
                 
-                try:
-                    channel = params.get_single("interleaved")
+                channel = header.get_param("interleaved")
+                if channel is not None:
                     transport = InterleavedTransport(self, channel)
                     break
-                except KeyError:
-                    pass
                 
                 udp = next(transport, "UDP").upper() == "UDP"
-                if udp and "unicast" in params:
-                    transport = UdpTransport(self, params)
+                if udp and header.get_param("unicast") is not None:
+                    transport = UdpTransport(self, header)
                     break
                 
                 msg = ("Only unicast UDP and interleaved transports "
                     "supported")
                 raise ValueError(msg)
-            except (ValueError, KeyError) as exc:
+            except ValueError as exc:
                 single_error = error is None
                 error = format(exc)
         else:  # No suitable transport found
@@ -384,24 +383,21 @@ class Handler(basehttp.RequestHandler):
             return
         
         try:
-            ranges = iter(header_list(self.headers, "Range"))
-            range = next(ranges, None)
-            if range:
-                if next(ranges, None):
-                    raise ValueError("Only single play range supported")
-                range = net.HeaderParams(range)
-                if "time" in range:
+            if "Range" in self.headers:
+                time = self.headers.get_param(header="Range", param="time")
+                if time is not None:
                     raise ValueError("Start time parameter not supported")
-                npt = range.get_single("npt")
+                npt = self.headers.get_param(header="Range", param="npt")
+                if npt is None:
+                    msg = "Only NPT range supported"
+                    self.send_response(NOT_IMPLEMENTED, msg)
+                    self.send_header("Accept-Ranges", "npt")
+                    self.end_headers()
+                    return
                 [npt, end] = header_partition(npt, "-")
                 if end:
                     raise ValueError("End point not supported")
                 self.session.pause_point = float(npt)
-        except KeyError:  # Missing "npt" parameter
-            self.send_response(NOT_IMPLEMENTED, "Only NPT range supported")
-            self.send_header("Accept-Ranges", "npt")
-            self.end_headers()
-            return
         except ValueError as err:
             raise basehttp.ErrorResponse(
                 HEADER_FIELD_NOT_VALID_FOR_RESOURCE, err)
@@ -491,16 +487,13 @@ class Handler(basehttp.RequestHandler):
         self.sessionparsed = True
         self.invalidsession = True
         self.session = None  # Indicate no session by default
-        sessions = iter(header_list(self.headers, "Session"))
-        key = next(sessions, None)
+        key = self.headers.get_params(header="Session")
         if not key:
             self.invalidsession = False
             return
         try:
-            if next(sessions, None):
-                raise ValueError("More than one session given")
-            [key, _] = net.header_partition(key, ";")
-            self.sessionkey = int(net.header_unquote(key), 16)
+            [key, _] = key[0]
+            self.sessionkey = int(key, 16)
         except ValueError as err:
             raise basehttp.ErrorResponse(SESSION_NOT_FOUND, err)
         self.session = self.server._sessions.get(self.sessionkey)
@@ -630,11 +623,13 @@ class Transport:
         pass
 
 class UdpTransport(Transport):
-    def __init__(self, handler, params):
-        port = params.get_single("client_port")
+    def __init__(self, handler, header):
+        port = header.get_param("client_port")
+        if port is None:
+            raise ValueError('UDP transport missing "client_port" parameter')
         [port, end] = header_partition(port, "-")
-        self.port = int(net.header_unquote(port))
-        if end and int(net.header_unquote(end)) < self.port + 1:
+        self.port = int(port)
+        if end and int(end) < self.port + 1:
             raise ValueError("Pair of ports required for RTP and RTCP")
         
         [self.dest, _] = handler.client_address
@@ -649,8 +644,8 @@ class UdpTransport(Transport):
 class InterleavedTransport(Transport):
     def __init__(self, handler, channel):
         [channel, end] = header_partition(channel, "-")
-        self.channel = int(net.header_unquote(channel))
-        if end and int(net.header_unquote(end)) < self.channel + 1:
+        self.channel = int(channel)
+        if end and int(end) < self.channel + 1:
             raise ValueError("Pair of channels required for RTP and RTCP")
         
         self.handler = handler
