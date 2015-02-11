@@ -89,7 +89,23 @@ def download(url, output=None):
     iview.fetch.fetch_program(url, execvp=True, dest_file=output)
 
 def play(file):
+    from selectors import DefaultSelector
+    from iview.rtsp import Server
+    from iview.utils import format_addr
+    from iview.utils import select_callbacks
+    
     config()
+    with DefaultSelector() as selector:
+        server = Server(("127.1", 0))
+        try:
+            netloc = format_addr((server.server_name, server.server_port))
+            path = urllib.parse.quote(file)
+            print("rtsp://{}/{}/".format(netloc, path))
+            server.register(selector)
+            while True:
+                select_callbacks(selector)
+        finally:
+            server.server_close()
 
 def batch(batch_file):
     config()

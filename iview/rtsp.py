@@ -9,8 +9,7 @@ from .utils import header_list, header_split, header_partition
 import email.message
 from misc import joinpath
 import time
-import selectors
-from .utils import SelectableServer, select_callbacks
+from .utils import SelectableServer
 from .utils import RollbackReader
 from socketserver import UDPServer, BaseRequestHandler
 from struct import Struct
@@ -685,31 +684,3 @@ class InterleavedHandler(BaseRequestHandler):
         self.server.connection.wfile.write(header)
         self.server.connection.wfile.write(packet)
         self.server.connection.wfile.flush()
-
-def main(address="", *, noffmpeg2=False):
-    url = urllib.parse.SplitResult(scheme="", netloc=address,
-        path="", query="", fragment="")
-    port = url.port
-    if port is None:
-        port = 554
-    address = (url.hostname or "", port)
-    
-    with selectors.DefaultSelector() as selector:
-        server = Server(address, ffmpeg2=not noffmpeg2)
-        try:
-            port = url.port
-            if port is not None:
-                port = server.server_port
-            print("rtsp://" + format_addr((server.server_name, port)))
-            server.register(selector)
-            while True:
-                select_callbacks(selector)
-        finally:
-            server.server_close()
-
-if __name__ == "__main__":
-    try:
-        from sys import argv
-        main(*argv[1:])
-    except (KeyboardInterrupt, BrokenPipeError):
-        raise SystemExit(1)
