@@ -23,13 +23,18 @@ class Server(SelectableServer, HTTPServer):
         """ffmpeg2: Assume FF MPEG 2.1 rather than libav 0.8.6"""
         self._ffmpeg2 = ffmpeg2
         self._sessions = dict()
+        self._last_media = None
         super().__init__(address, Handler)
     
-    def _get_sdp(self, file):
+    def _get_media(self, path):
+        """Returns OS media path from URL path"""
+        return joinpath(path, ".")
+    
+    def _get_sdp(self, media):
         options = (
             "-show_entries", "format=duration : format_tags=title",
             "-print_format", "json",
-            file,
+            media,
         )
         ffprobe = _ffmpeg_command("ffprobe", options, stdout=subprocess.PIPE)
         with ffprobe, TextIOWrapper(ffprobe.stdout, "ascii") as metadata:
@@ -41,7 +46,7 @@ class Server(SelectableServer, HTTPServer):
         
         options = ("-t", "0")  # Stop before processing any video
         streams = ((type, None) for type in _streamtypes)
-        ffmpeg = _ffmpeg(file, options, streams,
+        ffmpeg = _ffmpeg(media, options, streams,
             loglevel="error",  # Avoid empty output warning caused by "-t 0"
             stdout=subprocess.PIPE,
             ffmpeg2=self._ffmpeg2,
@@ -98,7 +103,7 @@ class Server(SelectableServer, HTTPServer):
                     pass  # Close and wait for process
                 msg = "FF MPEG failed generating SDP data; exit status: {}"
                 raise EnvironmentError(msg.format(ffmpeg.returncode))
-        return (sdp.getvalue(), streams)
+        return (media, sdp.getvalue(), streams)
     
     def server_close(self, *pos, **kw):
         while self._sessions:
@@ -453,8 +458,11 @@ class Handler(basehttp.RequestHandler):
     
     def parse_media(self):
         try:
-            self.ospath = joinpath(self.media, ".")
-            (sdp, self.streams) = self.server._get_sdp(self.ospath)
+            media = self.server._get_media(self.media)
+            if media != self.server._last_media:
+                self.server._last_description = self.server._get_sdp(media)
+                self.server._last_media = media
+            (self.ospath, sdp, self.streams) = self.server._last_description
         except (ValueError, EnvironmentError,
         subprocess.CalledProcessError) as err:
             raise basehttp.ErrorResponse(NOT_FOUND, err)
