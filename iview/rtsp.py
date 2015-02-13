@@ -30,7 +30,11 @@ class Server(SelectableServer, HTTPServer):
         """Returns OS media path from URL path"""
         return joinpath(path, ".")
     
-    def _get_sdp(self, media):
+    def _get_metadata(self, media):
+        """Returns a metadata dictionary that includes the keys:
+        * title (optional): string, or None (the default)
+        * duration (required): real number, formattable as a string
+        """
         options = (
             "-show_entries", "format=duration : format_tags=title",
             "-print_format", "json",
@@ -42,68 +46,75 @@ class Server(SelectableServer, HTTPServer):
         if ffprobe.returncode:
             msg = "ffprobe returned exit status {}"
             raise EnvironmentError(msg.format(ffprobe.returncode))
-        notitle = "title" not in metadata["format"].get("tags", dict())
+        metadata = dict(
+            title=metadata["format"].get("tags", dict()).get("title"),
+            duration=metadata["format"]["duration"],
+        )
+        return metadata
+    
+    def _get_sdp(self, media):
+        """Return a (sdp, streams) tuple"""
+        metadata = self._get_metadata(media)
         
         options = ("-t", "0")  # Stop before processing any video
         streams = ((type, None) for type in _streamtypes)
         ffmpeg = _ffmpeg(media, options, streams,
             loglevel="error",  # Avoid empty output warning caused by "-t 0"
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             ffmpeg2=self._ffmpeg2,
         )
-        with ffmpeg:
-            sdp = BytesIO()
-            line = ffmpeg.stdout.readline()
+        [lines, _] = ffmpeg.communicate()
+        lines = lines.splitlines(keepends=True)
+        sdp = BytesIO()
+        
+        line_iter = iter(lines)
+        # FF MPEG unhelpfully adds this prefix to its output
+        if lines and lines[0].strip() == b"SDP:":
+            next(line_iter)
+        
+        streams = 0
+        rtcp_bandwidth = False  # True if b=RR:0 written
+        for line in line_iter:
+            type = line.strip()[:1]  # Empty string => EOF
+            if not streams and not rtcp_bandwidth and (
+                    type in b"trzkam" or line.startswith(b"b=RR:")):
+                sdp.write(b"b=RR:0\r\n")
+                rtcp_bandwidth = True
+            if line.startswith(b"b=RR:"):
+                line = b""
+            if type in b"m":
+                if streams:  # End of a media section
+                    control = "a=control:{}\r\n".format(streams - 1)
+                    sdp.write(control.encode("ascii"))
+                else:  # End of the top session-level section
+                    range = "a=range:npt=0-{}\r\n"
+                    range = range.format(metadata["duration"])
+                    sdp.write(range.encode("ascii"))
+                rtcp_bandwidth = False
+            if not type:
+                break
             
-            # FF MPEG unhelpfully adds this prefix to its output
-            if line.strip() == b"SDP:":
-                line = ffmpeg.stdout.readline()
-            
-            streams = 0
-            rtcp_bandwidth = False  # True if b=RR:0 written
-            while line:
-                type = line.strip()[:1]  # Empty string => EOF
-                if not streams and not rtcp_bandwidth and (
-                        type in b"trzkam" or line.startswith(b"b=RR:")):
-                    sdp.write(b"b=RR:0\r\n")
-                    rtcp_bandwidth = True
-                if line.startswith(b"b=RR:"):
-                    line = b""
-                if type in b"m":
-                    if streams:  # End of a media section
-                        control = "a=control:{}\r\n".format(streams - 1)
-                        sdp.write(control.encode("ascii"))
-                    else:  # End of the top session-level section
-                        range = "a=range:npt=0-{}\r\n"
-                        range = range.format(metadata["format"]["duration"])
-                        sdp.write(range.encode("ascii"))
-                    rtcp_bandwidth = False
-                if not type:
-                    break
-                
-                if type == b"m":
-                    fields = line.split(maxsplit=2)
-                    PORT = 1
-                    fields[PORT] = b"0"  # VLC hangs or times out otherwise
-                    line = b" ".join(fields)
-                    streams += 1
-                if notitle and type == b"s":
+            if type == b"m":
+                fields = line.split(maxsplit=2)
+                PORT = 1
+                fields[PORT] = b"0"  # VLC hangs or times out otherwise
+                line = b" ".join(fields)
+                streams += 1
+            if type == b"s":
+                title = metadata.get("title")
+                if title is None:
                     # SDP specification says the session name field must be
                     # present and non-empty, recommending a single space
                     # where there is no name, but players tend to handle
                     # omitting it better
                     line = b""
-                
-                if not line.startswith(b"a=control:"):
-                    sdp.write(line)
-                
-                line = ffmpeg.stdout.readline()
-            else:
-                with ffmpeg:
-                    pass  # Close and wait for process
-                msg = "FF MPEG failed generating SDP data; exit status: {}"
-                raise EnvironmentError(msg.format(ffmpeg.returncode))
-        return (media, sdp.getvalue(), streams)
+                else:
+                    line = "s={}\r\n".format(title).encode("utf-8")
+            
+            if not line.startswith(b"a=control:"):
+                sdp.write(line)
+        return (sdp.getvalue(), streams)
     
     def server_close(self, *pos, **kw):
         while self._sessions:
@@ -147,10 +158,11 @@ def _ffmpeg(file, options, streams, ffmpeg2=True, **kw):
     
     return _ffmpeg_command("ffmpeg", options, **kw)
 
-def _ffmpeg_command(command, options, loglevel="warning", **popenargs):
+def _ffmpeg_command(command, options, *,
+        loglevel="warning", stdin=subprocess.DEVNULL, **popenargs):
     command = [command, "-loglevel", loglevel]
     command.extend(options)
-    return subprocess.Popen(command, stdin=subprocess.DEVNULL, **popenargs)
+    return subprocess.Popen(command, stdin=stdin, **popenargs)
 
 class Handler(basehttp.RequestHandler):
     server_version = "RTSP-server " + basehttp.RequestHandler.server_version
@@ -462,7 +474,8 @@ class Handler(basehttp.RequestHandler):
             if media != self.server._last_media:
                 self.server._last_description = self.server._get_sdp(media)
                 self.server._last_media = media
-            (self.ospath, sdp, self.streams) = self.server._last_description
+            self.ospath = self.server._last_media
+            (sdp, self.streams) = self.server._last_description
         except (ValueError, EnvironmentError,
         subprocess.CalledProcessError) as err:
             raise basehttp.ErrorResponse(NOT_FOUND, err)
