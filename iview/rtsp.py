@@ -26,11 +26,22 @@ class Server(SelectableServer, HTTPServer):
         self._last_media = None
         super().__init__(address, Handler)
     
-    def _get_media(self, path):
-        """Returns OS media path from URL path"""
-        return joinpath(path, ".")
+    def server_close(self, *pos, **kw):
+        while self._sessions:
+            (_, session) = self._sessions.popitem()
+            session.end()
+        return super().server_close(*pos, **kw)
     
-    def _get_metadata(self, media):
+class Media:
+    def __init__(self, path):
+        self.file = joinpath(path, ".")
+    
+    def __eq__(self, other):
+        if not isinstance(other, Media):
+            return NotImplemented
+        return self.file == other.file
+    
+    def get_metadata(self):
         """Returns a metadata dictionary that includes the keys:
         * title (optional): string, or None (the default)
         * duration (required): real number, formattable as a string
@@ -38,7 +49,7 @@ class Server(SelectableServer, HTTPServer):
         options = (
             "-show_entries", "format=duration : format_tags=title",
             "-print_format", "json",
-            media,
+            self.file,
         )
         ffprobe = _ffmpeg_command("ffprobe", options, stdout=subprocess.PIPE)
         with ffprobe, TextIOWrapper(ffprobe.stdout, "ascii") as metadata:
@@ -52,17 +63,16 @@ class Server(SelectableServer, HTTPServer):
         )
         return metadata
     
-    def _get_sdp(self, media):
-        """Return a (sdp, streams) tuple"""
-        metadata = self._get_metadata(media)
+    def get_sdp(self, server):
+        metadata = self.get_metadata()
         
         options = ("-t", "0")  # Stop before processing any video
         streams = ((type, None) for type in _streamtypes)
-        ffmpeg = _ffmpeg(media, options, streams,
+        ffmpeg = _ffmpeg(self.file, options, streams,
             loglevel="error",  # Avoid empty output warning caused by "-t 0"
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            ffmpeg2=self._ffmpeg2,
+            ffmpeg2=server._ffmpeg2,
         )
         [lines, _] = ffmpeg.communicate()
         lines = lines.splitlines(keepends=True)
@@ -73,19 +83,19 @@ class Server(SelectableServer, HTTPServer):
         if lines and lines[0].strip() == b"SDP:":
             next(line_iter)
         
-        streams = 0
+        self.streams = 0
         rtcp_bandwidth = False  # True if b=RR:0 written
         for line in line_iter:
             type = line.strip()[:1]  # Empty string => EOF
-            if not streams and not rtcp_bandwidth and (
+            if not self.streams and not rtcp_bandwidth and (
                     type in b"trzkam" or line.startswith(b"b=RR:")):
                 sdp.write(b"b=RR:0\r\n")
                 rtcp_bandwidth = True
             if line.startswith(b"b=RR:"):
                 line = b""
             if type in b"m":
-                if streams:  # End of a media section
-                    control = "a=control:{}\r\n".format(streams - 1)
+                if self.streams:  # End of a media section
+                    control = "a=control:{}\r\n".format(self.streams - 1)
                     sdp.write(control.encode("ascii"))
                 else:  # End of the top session-level section
                     range = "a=range:npt=0-{}\r\n"
@@ -100,7 +110,7 @@ class Server(SelectableServer, HTTPServer):
                 PORT = 1
                 fields[PORT] = b"0"  # VLC hangs or times out otherwise
                 line = b" ".join(fields)
-                streams += 1
+                self.streams += 1
             if type == b"s":
                 title = metadata.get("title")
                 if title is None:
@@ -114,13 +124,10 @@ class Server(SelectableServer, HTTPServer):
             
             if not line.startswith(b"a=control:"):
                 sdp.write(line)
-        return (sdp.getvalue(), streams)
+        return sdp.getvalue()
     
-    def server_close(self, *pos, **kw):
-        while self._sessions:
-            (_, session) = self._sessions.popitem()
-            session.end()
-        return super().server_close(*pos, **kw)
+    def get_play_file(self, start):
+        return open(self.file, "rb")
 
 _streamtypes = ("video", "audio")
 
@@ -195,8 +202,6 @@ class Handler(basehttp.RequestHandler):
         return basehttp.RequestHandler.get_encoding(self, protocol)
     
     def handle_method(self):
-        self.media = None  # Indicates path not parsed
-        self.streams = None  # Indicates media not parsed
         self.sessionparsed = False
         basehttp.RequestHandler.handle_method(self)
     
@@ -258,13 +263,13 @@ class Handler(basehttp.RequestHandler):
                 msg = "No media or session specified"
                 raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE,
                     msg)
-            session = Session(self.media, self.ospath, self.streams)
+            session = Session(self.media)
         else:
             session = self.session
         
         if self.stream is None:
-            if self.streams > 1:
-                msg = "{} streams available".format(self.streams)
+            if self.media.streams > 1:
+                msg = "{} streams available".format(self.media.streams)
                 raise basehttp.ErrorResponse(AGGREGATE_OPERATION_NOT_ALLOWED,
                     msg)
             self.stream = 0
@@ -418,7 +423,7 @@ class Handler(basehttp.RequestHandler):
             raise basehttp.ErrorResponse(
                 HEADER_FIELD_NOT_VALID_FOR_RESOURCE, err)
         
-        self.session.start(ffmpeg2=self.server._ffmpeg2)
+        self.session.start(self.server)
         self.send_response(OK)
         self.send_session()
         range = "npt={:f}-".format(self.session.pause_point)
@@ -458,7 +463,6 @@ class Handler(basehttp.RequestHandler):
     def parse_path(self):
         """Parse path into media path and possible stream number"""
         basehttp.RequestHandler.parse_path(self)
-        self.media = self.parsedpath[:-1]
         stream = self.parsedpath[-1]
         if stream:
             try:
@@ -467,20 +471,21 @@ class Handler(basehttp.RequestHandler):
                 raise basehttp.ErrorResponse(NOT_FOUND, err)
         else:
             self.stream = None
+        self.media = Media(self.parsedpath[:-1])
     
     def parse_media(self):
         try:
-            media = self.server._get_media(self.media)
-            if media != self.server._last_media:
-                self.server._last_description = self.server._get_sdp(media)
-                self.server._last_media = media
-            self.ospath = self.server._last_media
-            (sdp, self.streams) = self.server._last_description
+            if self.media == self.server._last_media:
+                self.media = self.server._last_media
+            else:
+                self.server._last_media = self.media
+                self.server._last_description = self.media.get_sdp(
+                    self.server)
         except (ValueError, EnvironmentError,
         subprocess.CalledProcessError) as err:
             raise basehttp.ErrorResponse(NOT_FOUND, err)
         self.validate_stream()
-        return sdp
+        return self.server._last_description
     
     def parse_session_path(self):
         if not self.plainpath:
@@ -489,18 +494,19 @@ class Handler(basehttp.RequestHandler):
         self.parse_path()
         if self.session:
             if self.media != self.session.media:
-                msg = "Session already set up with different media file"
+                msg = "Session already set up with different media"
                 raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE,
                     msg)
-            self.streams = len(self.session.transports)
+            self.media = self.session.media
             self.validate_stream()
         else:
             self.parse_media()
     
     def validate_stream(self):
         if (self.stream is not None and
-        self.stream not in range(self.streams)):
-            msg = "Stream number out of range 0-{}".format(self.streams - 1)
+        self.stream not in range(self.media.streams)):
+            max = self.media.streams - 1
+            msg = "Stream number out of range 0-{}".format(max)
             raise basehttp.ErrorResponse(NOT_FOUND, msg)
     
     def parse_session(self):
@@ -522,14 +528,6 @@ class Handler(basehttp.RequestHandler):
         self.invalidsession = False
     
     def send_allow(self):
-        if self.plainpath:
-            try:
-                if self.media is None:
-                    self.parse_path()
-                if self.streams is None:
-                    self.parse_media()
-            except basehttp.ErrorResponse:
-                return
         if not self.sessionparsed:
             try:
                 self.parse_session()
@@ -551,7 +549,7 @@ class Handler(basehttp.RequestHandler):
             if self.stream is None:
                 allow.append("DESCRIBE")
             
-            singlestream = self.stream is not None or self.streams <= 1
+            singlestream = self.stream is not None or self.media.streams <= 1
         else:
             singlestream = self.session and len(self.session.transports) <= 1
         if (mediamatch and singlestream and not self.invalidsession and
@@ -605,29 +603,38 @@ Handler.allow_codes = Handler.allow_codes | {
 }
 
 class Session:
-    def __init__(self, media, ospath, streams):
+    def __init__(self, media):
         self.media = media
-        self.ospath = ospath
-        self.transports = [None] * streams
+        self.transports = [None] * self.media.streams
         self.ffmpeg = None
         self.pause_point = 0
     
-    def start(self, ffmpeg2=True):
-        options = ("-re", "-ss", format(self.pause_point, "f"))
-        transports = zip(_streamtypes, self.transports)
-        streams = list()
-        for [type, transport] in transports:
-            if transport:
-                streams.append((type, transport.setup()))
-        self.ffmpeg = _ffmpeg(self.ospath, options, streams, ffmpeg2=ffmpeg2,
-            stdout=subprocess.DEVNULL)
-        self.started = time.monotonic()
+    def start(self, server):
+        self.file = self.media.get_play_file(self.pause_point)
+        try:
+            options = ("-re", "-ss", format(self.pause_point, "f"))
+            transports = zip(_streamtypes, self.transports)
+            streams = list()
+            for [type, transport] in transports:
+                if transport:
+                    streams.append((type, transport.setup()))
+            self.ffmpeg = _ffmpeg("/dev/stdin", options, streams,
+                ffmpeg2=server._ffmpeg2,
+                stdin=self.file, bufsize=0, stdout=subprocess.DEVNULL)
+            self.started = time.monotonic()
+        except:
+            self.file.close()
+            raise
     
     def end(self):
         if self.ffmpeg:
             self.close_transports()
             self.ffmpeg.kill()  # Avoid FF MPEG sending RTCP BYE messages
             self.ffmpeg.wait()
+            self.close_media()
+    
+    def close_media(self):
+        self.file.close()
     
     def close_transports(self):
         for transport in self.transports:
