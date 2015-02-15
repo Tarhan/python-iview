@@ -15,6 +15,8 @@ from socketserver import UDPServer, BaseRequestHandler
 from struct import Struct
 import urllib.parse
 import json
+import selectors
+from select import PIPE_BUF
 
 _SESSION_DIGITS = 25
 
@@ -127,7 +129,7 @@ class Media:
         return sdp.getvalue()
     
     def get_play_file(self, start):
-        return open(self.file, "rb")
+        return (open(self.file, "rb"), 0)
 
 _streamtypes = ("video", "audio")
 
@@ -610,18 +612,22 @@ class Session:
         self.pause_point = 0
     
     def start(self, server):
-        self.file = self.media.get_play_file(self.pause_point)
+        [self.file, self.pause_point] = self.media.get_play_file(
+            self.pause_point)
         try:
-            options = ("-re", "-ss", format(self.pause_point, "f"))
+            options = ("-re",)
             transports = zip(_streamtypes, self.transports)
             streams = list()
             for [type, transport] in transports:
                 if transport:
                     streams.append((type, transport.setup()))
-            self.ffmpeg = _ffmpeg("/dev/stdin", options, streams,
+            self.ffmpeg = _ffmpeg("pipe:", options, streams,
                 ffmpeg2=server._ffmpeg2,
-                stdin=self.file, bufsize=0, stdout=subprocess.DEVNULL)
+                stdin=subprocess.PIPE, bufsize=0, stdout=subprocess.DEVNULL)
             self.started = time.monotonic()
+            self.selector = server.selector
+            self.selector.register(self.ffmpeg.stdin, selectors.EVENT_WRITE,
+                self.write_media)
         except:
             self.file.close()
             raise
@@ -638,6 +644,17 @@ class Session:
     
     def close_media(self):
         self.file.close()
+        self.selector.unregister(self.ffmpeg.stdin)
+        self.ffmpeg.stdin.close()
+    
+    def write_media(self):
+        data = self.file.read(PIPE_BUF)
+        if not data:
+            self.close_media()
+        try:
+            self.ffmpeg.stdin.write(data)
+        except BrokenPipeError:
+            self.close_media()
     
     def close_transports(self):
         for transport in self.transports:
