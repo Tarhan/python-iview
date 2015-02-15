@@ -450,7 +450,7 @@ class Handler(basehttp.RequestHandler):
         msg = None
         if self.session.ffmpeg:
             stopped = time.monotonic()
-            self.session.end()
+            self.session.end(pause=True)
             self.session.ffmpeg = None
             self.session.pause_point += stopped - self.session.started
         else:
@@ -626,10 +626,13 @@ class Session:
             self.file.close()
             raise
     
-    def end(self):
+    def end(self, pause=False):
         if self.ffmpeg:
             self.close_transports()
-            self.ffmpeg.kill()  # Avoid FF MPEG sending RTCP BYE messages
+            if pause:
+                self.ffmpeg.kill()  # Avoid FF MPEG sending RTCP BYE messages
+            else:
+                self.ffmpeg.terminate()
             self.ffmpeg.wait()
             self.close_media()
     
