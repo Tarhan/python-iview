@@ -10,7 +10,7 @@ try:
 except AttributeError:
     os_string = ' (non-Unix OS)'
 
-user_agent = 'Python-iView {}{}'.format(version, os_string)
+user_agent = 'Python-iView/{}{}'.format(version, os_string)
 
 base_url   = 'http://www.abc.net.au/iview/'
 config_url   = 'xml/config.xml?r={}'.format(api_version)

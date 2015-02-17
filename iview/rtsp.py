@@ -17,6 +17,7 @@ import urllib.parse
 import json
 import selectors
 from select import PIPE_BUF
+from . import config
 
 _SESSION_DIGITS = 25
 
@@ -172,7 +173,8 @@ def _ffmpeg_command(command, options, *,
     return subprocess.Popen(command, stdin=stdin, **popenargs)
 
 class Handler(basehttp.RequestHandler):
-    server_version = "RTSP-server " + basehttp.RequestHandler.server_version
+    server_version = "{} {}".format(config.user_agent,
+        basehttp.RequestHandler.server_version)
     protocol_version = "RTSP/1.0"
     
     def setup(self):
