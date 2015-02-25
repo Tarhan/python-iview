@@ -167,6 +167,20 @@ class RtmpWorker(threading.Thread):
 
 def fetch_program(url=None, *, item=dict(),
 execvp=False, dest_file=None, quiet=False, frontend=None):
+    """Download the video file of a programme
+    
+    The programme can be specified with either the "url" or "item" parameter.
+    There are three modes of operation:
+    
+    * Block until download is done or it failed. This is the default mode
+        (execvp=False, frontend=None).
+    * Invoke the downloader with exec() if possible, otherwise block like
+        above. This mode is invoked with execvp=True.
+    * Download in the background. This mode is invoked by setting the
+        "frontend" parameter to an object that receives progress updates from
+        another thread. In this mode, an RtmpWorker or HdsThread object is
+        normally returned.
+    """
     if dest_file is None:
         dest_file = get_filename(item.get("url", url))
     
