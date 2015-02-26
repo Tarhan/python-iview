@@ -35,80 +35,89 @@ from .utils import WritingReader
 from errno import ESPIPE, EBADF, EINVAL
 import os
 from itertools import chain
+from contextlib import closing
 
-def fetch(*pos, dest_file, frontend=None, abort=None, player=None, key=None,
-**kw):
-    url = manifest_url(*pos, **kw)
+class Fetcher:
+    def __init__(self, *pos, player=None, key=None, **kw):
+        self.player = player
+        self.key = key
+        self.url = manifest_url(*pos, **kw)
+        self.handler = PersistentConnectionHandler()
+        self.opener = urllib.request.build_opener(self.handler)
     
-    with PersistentConnectionHandler() as connection:
-        session = urllib.request.build_opener(connection)
-        
-        manifest = get_manifest(url, session)
-        url = manifest["baseURL"]
-        player = player_verification(manifest, player, key)
-        
-        duration = manifest.get("duration")
-        if duration:
-            duration = float(duration) or None
-        else:
-            duration = None
-        
-        # TODO: determine preferred bitrate, max bitrate, etc
-        media = manifest["media"][0]  # Just pick the first one!
-        href = media.get("href")
-        if href is not None:
-            href = urljoin(url, href)
-            bitrate = media.get("bitrate")  # Save this in case the child manifest does not specify a bitrate
-            raise NotImplementedError("/manifest/media/@href -> child manifest")
-        
-        bootstrap = get_bootstrap(media,
-            session=session, url=url, player=player)
-        
-        metadata = media.get("metadata")
-        
-        media_url = media["url"] + bootstrap["movie_identifier"]
-        if "highest_quality" in bootstrap:
-            media_url += bootstrap["highest_quality"]
-        if "server_base_url" in bootstrap:
-            media_url = urljoin(bootstrap["server_base_url"], media_url)
-        media_url = urljoin(url, media_url)
-        
-        if not duration:
-            if bootstrap["time"]:
-                duration = bootstrap["time"] / bootstrap["timescale"]
-            elif metadata:
-                scriptdata = flvlib.parse_scriptdata(io.BytesIO(metadata))
-                assert scriptdata["name"] == b"onMetaData"
-                duration = scriptdata["value"].get("duration")
-        
-        [flv, frags] = start_flv(dest_file,
-            metadata=metadata, bootstrap=bootstrap,
-            session=session, url=media_url, player=player,
-            frontend=frontend, duration=duration,
-        )
-        
-        for (index, seg, frag) in frags:
-            if abort and abort.is_set():
-                raise SystemExit()
-            response = get_frag(session, media_url, seg, frag, player=player)
+    def close(self):
+        self.handler.close()
+    
+    def fetch(self, dest_file, *, frontend=None, abort=None):
+        with closing(self):
+            manifest = get_manifest(self.url, self.opener)
+            url = manifest["baseURL"]
+            player = player_verification(manifest, self.player, self.key)
             
-            if abort and abort.is_set():
-                raise SystemExit()
-            parser = frag_to_flv(response, flv, strip_headers=index,
-                frontend=frontend, duration=duration)
-            next(parser)  # Download up to first FLV tag
+            duration = manifest.get("duration")
+            if duration:
+                duration = float(duration) or None
+            else:
+                duration = None
             
-            if abort and abort.is_set():
-                raise SystemExit()
-            next(parser)  # Download rest of fragment
+            # TODO: determine preferred bitrate, max bitrate, etc
+            media = manifest["media"][0]  # Just pick the first one!
+            href = media.get("href")
+            if href is not None:
+                href = urljoin(url, href)
+                bitrate = media.get("bitrate")  # Save this in case the child manifest does not specify a bitrate
+                raise NotImplementedError("/manifest/media/@href -> child manifest")
             
-            if abort and abort.is_set():
-                raise SystemExit()
-            [] = parser  # Write to FLV
-            strip_headers = True
-        
-        if not frontend:
-            print(file=stderr)
+            bootstrap = get_bootstrap(media,
+                session=self.opener, url=url, player=player)
+            
+            metadata = media.get("metadata")
+            
+            media_url = media["url"] + bootstrap["movie_identifier"]
+            if "highest_quality" in bootstrap:
+                media_url += bootstrap["highest_quality"]
+            if "server_base_url" in bootstrap:
+                media_url = urljoin(bootstrap["server_base_url"], media_url)
+            media_url = urljoin(url, media_url)
+            
+            if not duration:
+                if bootstrap["time"]:
+                    duration = bootstrap["time"] / bootstrap["timescale"]
+                elif metadata:
+                    reader = io.BytesIO(metadata)
+                    scriptdata = flvlib.parse_scriptdata(reader)
+                    assert scriptdata["name"] == b"onMetaData"
+                    duration = scriptdata["value"].get("duration")
+            
+            [flv, frags] = start_flv(dest_file,
+                metadata=metadata, bootstrap=bootstrap,
+                session=self.opener, url=media_url, player=player,
+                frontend=frontend, duration=duration,
+            )
+            
+            for (index, seg, frag) in frags:
+                if abort and abort.is_set():
+                    raise SystemExit()
+                response = get_frag(self.opener, media_url, seg, frag,
+                    player=player)
+                
+                if abort and abort.is_set():
+                    raise SystemExit()
+                parser = frag_to_flv(response, flv, strip_headers=index,
+                    frontend=frontend, duration=duration)
+                next(parser)  # Download up to first FLV tag
+                
+                if abort and abort.is_set():
+                    raise SystemExit()
+                next(parser)  # Download rest of fragment
+                
+                if abort and abort.is_set():
+                    raise SystemExit()
+                [] = parser  # Write to FLV
+                strip_headers = True
+            
+            if not frontend:
+                print(file=stderr)
 
 def get_bootstrap(media, *, session, url, player=""):
     bootstrap = media["bootstrapInfo"]

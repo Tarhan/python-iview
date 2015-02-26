@@ -240,11 +240,10 @@ class RtmpFetcher:
 
 RTMP_PROTOCOLS = {'rtmp', 'rtmpt', 'rtmpe', 'rtmpte'}
 
-class HdsFetcher:
+class HdsFetcher(hds.Fetcher):
     def __init__(self, file, auth):
         url = urljoin(auth['server'], auth['path'])
-        self.pos = (url, file, auth.get('tokenhd'))
-        self.kw = dict(
+        hds.Fetcher.__init__(self, url, file, auth.get('tokenhd'),
             player=config.akamaihd_player,
             key=config.akamaihd_key,
         )
@@ -254,9 +253,7 @@ class HdsFetcher:
             call = hds_open_file
         else:
             call = HdsThread
-        more_kw = dict(self.kw)
-        more_kw.update(kw)
-        return call(*self.pos, frontend=frontend, **more_kw)
+        return call(self, frontend=frontend, **kw)
 
 class HdsThread(threading.Thread):
     def __init__(self, *pos, frontend, **kw):
@@ -297,4 +294,4 @@ def hds_open_file(*pos, dest_file, **kw):
         fd = os.open(dest_file, flags, mode)
         dest_file = os.fdopen(fd, "wb")
     with dest_file:
-        return hds.fetch(*pos, dest_file=dest_file, **kw)
+        return hds.Fetcher.fetch(*pos, dest_file=dest_file, **kw)
