@@ -33,39 +33,30 @@ class Server(SelectableServer, HTTPServer):
         while self._sessions:
             (_, session) = self._sessions.popitem()
             session.end()
+            if session.media is not self._last_media:
+                session.media.close()
+        if self._last_media:
+            self._last_media.close()
         return super().server_close(*pos, **kw)
     
 class Media:
     def __init__(self, path):
         self.url = "/".join(path)
-        self.fetcher = get_fetcher(self.url)
+        self.fetcher = None
     
     def __eq__(self, other):
         if not isinstance(other, Media):
             return NotImplemented
         return self.url == other.url
     
-    def get_metadata_file(self):
-        """Returns a (metadata, media-data) tuple
-        
-        The "metadata" dictionary includes the keys:
-        * title (optional): string, or None (the default)
-        * duration (required): real number, formattable as a string
-        """
-        ffprobe = _ffmpeg_command("ffprobe", options, stdout=subprocess.PIPE)
-        with ffprobe, TextIOWrapper(ffprobe.stdout, "ascii") as metadata:
-            metadata = json.load(metadata)
-        if ffprobe.returncode:
-            msg = "ffprobe returned exit status {}"
-            raise EnvironmentError(msg.format(ffprobe.returncode))
-        metadata = dict(
-            title=metadata["format"].get("tags", dict()).get("title"),
-            duration=metadata["format"]["duration"],
-        )
-        return (metadata, ...)
+    def close(self):
+        if self.fetcher:
+            self.fetcher.close()
     
     def get_sdp(self, server):
-        [metadata, pipe_data] = self.get_metadata_file()
+        self.fetcher = get_fetcher(self.url)
+        metadata = self.fetcher.get_metadata()
+        pipe_data = self.fetcher.get_probe_data()
         
         options = ("-t", "0")  # Stop before processing any video
         streams = ((type, None) for type in _streamtypes)
@@ -266,6 +257,7 @@ class Handler(basehttp.RequestHandler):
                 raise basehttp.ErrorResponse(METHOD_NOT_VALID_IN_THIS_STATE,
                     msg)
             session = Session(self.media)
+            self.media.server_owned = False
         else:
             session = self.session
         
@@ -374,6 +366,10 @@ class Handler(basehttp.RequestHandler):
                 msg = "Stream {} closed".format(self.stream)
             else:
                 msg = "Stream {} not set up".format(self.stream)
+        if self.session.media is self.server._last_media:
+            self.server._last_media.server_owned = True
+        else:
+            self.session.media.close()
         self.send_response(OK, msg)
         if self.sessionkey in self.server._sessions:
             self.send_session()
@@ -474,18 +470,22 @@ class Handler(basehttp.RequestHandler):
         else:
             self.stream = None
         self.media = Media(self.parsedpath[:-1])
+        self.media.server_owned = True
     
     def parse_media(self):
-        try:
-            if self.media == self.server._last_media:
-                self.media = self.server._last_media
-            else:
-                self.server._last_media = self.media
+        cached = self.server._last_media
+        if self.media == cached:
+            self.media = cached
+        else:
+            if cached and cached.server_owned:
+                cached.close()
+            try:
                 self.server._last_description = self.media.get_sdp(
                     self.server)
-        except (ValueError, EnvironmentError,
-        subprocess.CalledProcessError) as err:
-            raise basehttp.ErrorResponse(NOT_FOUND, err)
+            except (ValueError, EnvironmentError,
+                    subprocess.CalledProcessError) as err:
+                raise basehttp.ErrorResponse(NOT_FOUND, err)
+            self.server._last_media = self.media
         self.validate_stream()
         return self.server._last_description
     

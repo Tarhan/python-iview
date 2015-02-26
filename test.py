@@ -378,8 +378,8 @@ class TestProxy(TestCase):
             self.assertRaises(exception, iview.comm.get_index)
             self.assertRaises(exception, iview.comm.get_auth)
         
-        fetcher = hds.Fetcher("http://localhost/", "media path", "hdnea")
-        self.assertRaises(exception, fetcher.fetch, None)
+        with self.assertRaises(exception):
+            hds.Fetcher("http://localhost/", "media path", "hdnea")
 
 @contextmanager
 def substattr(obj, attr, *value):

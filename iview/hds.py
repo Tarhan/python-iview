@@ -39,72 +39,94 @@ from contextlib import closing
 
 class Fetcher:
     def __init__(self, *pos, player=None, key=None, **kw):
-        self.player = player
-        self.key = key
-        self.url = manifest_url(*pos, **kw)
+        url = manifest_url(*pos, **kw)
         self.handler = PersistentConnectionHandler()
-        self.opener = urllib.request.build_opener(self.handler)
+        try:
+            self.opener = urllib.request.build_opener(self.handler)
+            self.parse_metadata(url, player=player, key=key)
+        except:
+            self.close()
+            raise
     
     def close(self):
         self.handler.close()
     
+    def get_metadata(self):
+        """Returns a metadata dictionary including the keys:
+        
+        * title (optional): string, or None (the default)
+        * duration (required): real number, formattable as a string
+        """
+        return dict(
+            title=None,
+            duration=self.duration,
+        )
+    
+    def get_probe_data(self):
+        """Returns a small amount of media data for probing codec parameters
+        """
+        return b""
+    
+    def parse_metadata(self, url, *, player, key):
+        manifest = get_manifest(url, self.opener)
+        url = manifest["baseURL"]
+        self.player = player_verification(manifest, player, key)
+        
+        duration = manifest.get("duration")
+        if duration:
+            self.duration = float(duration) or None
+        else:
+            self.duration = None
+        
+        # TODO: determine preferred bitrate, max bitrate, etc
+        media = manifest["media"][0]  # Just pick the first one!
+        href = media.get("href")
+        if href is not None:
+            href = urljoin(url, href)
+            bitrate = media.get("bitrate")  # Save this in case the child manifest does not specify a bitrate
+            raise NotImplementedError("/manifest/media/@href -> child manifest")
+        
+        self.bootstrap = get_bootstrap(media,
+            session=self.opener, url=url, player=self.player)
+        
+        self.metadata = media.get("metadata")
+        
+        self.media_url = media["url"] + self.bootstrap["movie_identifier"]
+        if "highest_quality" in self.bootstrap:
+            self.media_url += self.bootstrap["highest_quality"]
+        base = self.bootstrap.get("server_base_url")
+        if base is not None:
+            self.media_url = urljoin(base, self.media_url)
+        self.media_url = urljoin(url, self.media_url)
+        
+        if not self.duration:
+            time = self.bootstrap["time"]
+            if time:
+                self.duration = time / self.bootstrap["timescale"]
+            elif self.metadata:
+                reader = io.BytesIO(self.metadata)
+                scriptdata = flvlib.parse_scriptdata(reader)
+                assert scriptdata["name"] == b"onMetaData"
+                self.duration = scriptdata["value"].get("duration")
+    
     def fetch(self, dest_file, *, frontend=None, abort=None):
         with closing(self):
-            manifest = get_manifest(self.url, self.opener)
-            url = manifest["baseURL"]
-            player = player_verification(manifest, self.player, self.key)
-            
-            duration = manifest.get("duration")
-            if duration:
-                duration = float(duration) or None
-            else:
-                duration = None
-            
-            # TODO: determine preferred bitrate, max bitrate, etc
-            media = manifest["media"][0]  # Just pick the first one!
-            href = media.get("href")
-            if href is not None:
-                href = urljoin(url, href)
-                bitrate = media.get("bitrate")  # Save this in case the child manifest does not specify a bitrate
-                raise NotImplementedError("/manifest/media/@href -> child manifest")
-            
-            bootstrap = get_bootstrap(media,
-                session=self.opener, url=url, player=player)
-            
-            metadata = media.get("metadata")
-            
-            media_url = media["url"] + bootstrap["movie_identifier"]
-            if "highest_quality" in bootstrap:
-                media_url += bootstrap["highest_quality"]
-            if "server_base_url" in bootstrap:
-                media_url = urljoin(bootstrap["server_base_url"], media_url)
-            media_url = urljoin(url, media_url)
-            
-            if not duration:
-                if bootstrap["time"]:
-                    duration = bootstrap["time"] / bootstrap["timescale"]
-                elif metadata:
-                    reader = io.BytesIO(metadata)
-                    scriptdata = flvlib.parse_scriptdata(reader)
-                    assert scriptdata["name"] == b"onMetaData"
-                    duration = scriptdata["value"].get("duration")
-            
             [flv, frags] = start_flv(dest_file,
-                metadata=metadata, bootstrap=bootstrap,
-                session=self.opener, url=media_url, player=player,
-                frontend=frontend, duration=duration,
+                metadata=self.metadata, bootstrap=self.bootstrap,
+                session=self.opener, url=self.media_url, player=self.player,
+                frontend=frontend, duration=self.duration,
             )
             
             for (index, seg, frag) in frags:
                 if abort and abort.is_set():
                     raise SystemExit()
-                response = get_frag(self.opener, media_url, seg, frag,
-                    player=player)
+                response = get_frag(self.opener, self.media_url, seg, frag,
+                    player=self.player)
                 
                 if abort and abort.is_set():
                     raise SystemExit()
                 parser = frag_to_flv(response, flv, strip_headers=index,
-                    frontend=frontend, duration=duration)
+                    frontend=frontend, duration=self.duration)
                 next(parser)  # Download up to first FLV tag
                 
                 if abort and abort.is_set():
