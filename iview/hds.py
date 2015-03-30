@@ -67,11 +67,13 @@ class Fetcher:
         """
         # Return the FLV header and data from the first fragment only
         dest_file = io.BytesIO()
-        [flv, frags] = start_flv(self, dest_file)
-        [_, seg, frag] = next(frags)
+        write_flv_start(self, dest_file)
+        segs = iter_segs(self.bootstrap)
+        frag_runs = iter_frag_runs(self.bootstrap)
+        [_, seg, frag] = next(iter_frags(segs, frag_runs))
         response = get_frag(self.opener, self.media_url, seg, frag,
             player=self.player)
-        [_, _] = frag_to_flv(response, flv)  # Execute parser until end
+        [_, _] = frag_to_flv(response, dest_file)  # Execute parser until end
         return dest_file.getvalue()
     
     def parse_metadata(self, url, *, player, key):
@@ -231,11 +233,7 @@ def start_flv(fetcher, dest_file, frontend=None):
     progress_update(frontend, flv, 0, fetcher.duration)
     
     possibly_trunc(dest_file)
-    # Assume audio and video tags will be present
-    flvlib.write_file_header(flv, audio=True, video=True)
-    
-    if fetcher.metadata:
-        flvlib.write_scriptdata(flv, fetcher.metadata)
+    write_flv_start(fetcher, dest_file)
     segs = iter_segs(fetcher.bootstrap)
     frag_runs = iter_frag_runs(fetcher.bootstrap)
     frags = iter_frags(segs, frag_runs)
@@ -367,6 +365,13 @@ def get_frag(session, url, seg, frag, player=""):
     url = "{}Seg{}-Frag{}".format(url, seg, frag)
     url = urljoin(url, player)
     return http_get(session, url, ("video/f4f",))
+
+def write_flv_start(fetcher, flv):
+    # Assume audio and video tags will be present
+    flvlib.write_file_header(flv, audio=True, video=True)
+    
+    if fetcher.metadata:
+        flvlib.write_scriptdata(flv, fetcher.metadata)
 
 def frag_to_flv(frag, flv, *,
         strip_headers=False, frontend=None, duration=None):
