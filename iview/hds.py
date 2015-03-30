@@ -290,12 +290,14 @@ metadata, bootstrap, session, url, player="", frontend=None, duration=None):
             last_ts = tag["timestamp"]
             progress_update(frontend, dest_file, last_ts / 1000, duration)
             ref_offset = 0
-            for _ in range(3):  # Retry if fragment starts too late
+            # Retry a few times if estimated fragment starts too late
+            for _ in range(3):
                 if not ref_offset:
                     [run, ts_offset, frag_runs] = find_frag_run(
                         bootstrap, last_ts)
-                    ref_time = run["run_duration"]
-                    ref_offset = run["span"]
+                    # Reference is the end of the run
+                    ref_time = run["run_duration"]  # Time until reference
+                    ref_offset = run["span"]  # Fragments until reference
                 offset = ts_offset * ref_offset // ref_time
                 frag_index = run["frag_index"] + offset
                 segs = iter_segs(bootstrap, frag_index)
@@ -447,7 +449,14 @@ def mdat_boxes(frag):
         raise OverflowError("100 or more boxes in fragment")
 
 def find_frag_run(bootstrap, timestamp):
-    """Find a fragment run that probably contains the timestamp"""
+    """Find a fragment run that probably contains the timestamp
+    
+    Returns (run, ts_offset, runs), where:
+    * run is the fragment run probably containing the timestamp
+    * ts_offset is the offset from the start of the run to the input
+        timestamp
+    * runs is the iterator for fragment runs following this run
+    """
     timestamp *= bootstrap["frag_timescale"]
     runs = iter_frag_runs(bootstrap)
     for run in runs:
@@ -468,6 +477,12 @@ def seek_backwards(reader, timestamp):
         reader.seek(-flvlib.TAG_HEADER_LENGTH, io.SEEK_CUR)
 
 def iter_frag_runs(bootstrap):
+    """
+    Fields added to the run items:
+    * span: number of fragments included in the run
+    * run_duration: total duration of all fragments in the run
+    * frag_index: internal continuous 0-based fragment index number
+    """
     runs = iter(bootstrap["frag_runs"])
     flags = 0
     run = None
