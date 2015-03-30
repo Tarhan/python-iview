@@ -111,11 +111,7 @@ class Fetcher:
     
     def fetch(self, dest_file, *, frontend=None, abort=None):
         with closing(self):
-            [flv, frags] = start_flv(dest_file,
-                metadata=self.metadata, bootstrap=self.bootstrap,
-                session=self.opener, url=self.media_url, player=self.player,
-                frontend=frontend, duration=self.duration,
-            )
+            [flv, frags] = start_flv(self, dest_file, frontend=frontend)
             
             for (index, seg, frag) in frags:
                 if abort and abort.is_set():
@@ -214,27 +210,28 @@ def get_bootstrap(media, *, session, url, player=""):
     
     return result
 
-def start_flv(dest_file, *,
-metadata, bootstrap, session, url, player="", frontend=None, duration=None):
+def start_flv(fetcher, dest_file, frontend=None):
     """Determine resume point, or write out start of FLV"""
     frags = resume_point(dest_file,
-        metadata=metadata, bootstrap=bootstrap,
-        session=session, url=url, player=player,
-        frontend=frontend, duration=duration,
+        metadata=fetcher.metadata, bootstrap=fetcher.bootstrap,
+        session=fetcher.opener, url=fetcher.media_url, player=fetcher.player,
+        frontend=frontend, duration=fetcher.duration,
     )
     if frags is not None:
         return (dest_file, frags)
     
     flv = CounterWriter(dest_file)  # Track size even if piping to stdout
-    progress_update(frontend, flv, 0, duration)
+    progress_update(frontend, flv, 0, fetcher.duration)
     
     possibly_trunc(dest_file)
     # Assume audio and video tags will be present
     flvlib.write_file_header(flv, audio=True, video=True)
     
-    if metadata:
-        flvlib.write_scriptdata(flv, metadata)
-    frags = iter_frags(iter_segs(bootstrap), iter_frag_runs(bootstrap))
+    if fetcher.metadata:
+        flvlib.write_scriptdata(flv, fetcher.metadata)
+    segs = iter_segs(fetcher.bootstrap)
+    frag_runs = iter_frag_runs(fetcher.bootstrap)
+    frags = iter_frags(segs, frag_runs)
     return (flv, frags)
 
 def resume_point(dest_file, *,
