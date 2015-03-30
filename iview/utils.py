@@ -1,5 +1,5 @@
 import zlib
-from io import BufferedIOBase, BytesIO
+from io import BufferedIOBase, BytesIO, RawIOBase
 from urllib.parse import quote_plus
 from io import SEEK_CUR, SEEK_END
 import urllib.request
@@ -116,6 +116,21 @@ class WritingReader(BufferedIOBase):
         data = self.reader.read(n)
         self.writer.write(data)
         return data
+
+class GeneratorReader(RawIOBase):
+    def __init__(self, gen, initial=b""):
+        self._gen = gen
+        self._pending = initial
+    
+    def read(self, size):
+        if not self._pending:
+            self._pending = next(self._gen, b"")
+        result = self._pending[:size]
+        self._pending = self._pending[size:]
+        return result
+    
+    def close(self):
+        self._gen.close()
 
 def setitem(dict, key):
     """Decorator that adds the definition to a dictionary with a given key"""

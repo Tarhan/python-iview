@@ -31,7 +31,7 @@ import io
 from .utils import xml_text_elements
 from . import flvlib
 from .utils import read_int, read_string, read_strict
-from .utils import WritingReader
+from .utils import WritingReader, GeneratorReader
 from errno import ESPIPE, EBADF, EINVAL
 import os
 from itertools import chain
@@ -145,6 +145,38 @@ class Fetcher:
             
             if not frontend:
                 print(file=stderr)
+    
+    def get_play_file(self, start):
+        """Returns a (reader, start) tuple"""
+        buffer = io.BytesIO()
+        write_flv_start(self, buffer)
+        start /= 1e-3  # Scale to FLV timescale (ms)
+        [run, offset, more_runs] = find_frag_run(self.bootstrap, start)
+        # Convert timestamp offset to fragment offset
+        offset = int(offset * run["span"] // run["run_duration"])
+        segs = iter_segs(self.bootstrap, run["frag_index"] + offset)
+        seg = next(segs)
+        frag = run["first"] + offset
+        response = get_frag(self.opener, self.media_url, seg, frag,
+            player=self.player)
+        [timestamp, _] = frag_to_flv(response, buffer)  # Execute to end
+        tail = dict(run)  # Second half of run
+        tail["frag_index"] += offset + 1
+        tail["first"] += offset + 1
+        tail["span"] -= offset + 1
+        frags = iter_frags(segs, chain((tail,), more_runs))
+        buffer = buffer.getvalue()
+        gen = self._iter_play_file(frags)
+        timestamp *= 1e-3  # Scale from FLV timestamp (ms)
+        return (GeneratorReader(gen, buffer), timestamp)
+    
+    def _iter_play_file(self, frags):
+        for [_, seg, frag] in frags:
+            response = get_frag(self.opener, self.media_url, seg, frag,
+                player=self.player)
+            buffer = io.BytesIO()
+            [_, _] = frag_to_flv(response, buffer)  # Execute to end
+            yield buffer.getvalue()
 
 def get_bootstrap(media, *, session, url, player=""):
     bootstrap = media["bootstrapInfo"]
