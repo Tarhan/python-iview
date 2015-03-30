@@ -65,7 +65,14 @@ class Fetcher:
     def get_probe_data(self):
         """Returns a small amount of media data for probing codec parameters
         """
-        return b""
+        # Return the FLV header and data from the first fragment only
+        dest_file = io.BytesIO()
+        [flv, frags] = start_flv(self, dest_file)
+        [_, seg, frag] = next(frags)
+        response = get_frag(self.opener, self.media_url, seg, frag,
+            player=self.player)
+        [_, _] = frag_to_flv(response, flv)  # Execute parser until end
+        return dest_file.getvalue()
     
     def parse_metadata(self, url, *, player, key):
         manifest = get_manifest(url, self.opener)
@@ -361,7 +368,8 @@ def get_frag(session, url, seg, frag, player=""):
     url = urljoin(url, player)
     return http_get(session, url, ("video/f4f",))
 
-def frag_to_flv(frag, flv, *, strip_headers, frontend=None, duration=None):
+def frag_to_flv(frag, flv, *,
+        strip_headers=False, frontend=None, duration=None):
     """Yields two times:
     1. The timestamp of the first FLV tag when it is parsed
     2. After fully downloading the from HTTP, but before writing to FLV file
